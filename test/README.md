@@ -2,6 +2,16 @@
 
 Simple test manifests for Envoy Gateway.
 
+## Files
+
+```text
+01-gateway-class.yaml  # GatewayClass with parametersRef to EnvoyProxy
+02-envoy-proxy.yaml    # EnvoyProxy with security context
+02-gateway.yaml        # Gateway with HTTP listener
+03-sample-app.yaml     # Echo app in "demo" namespace
+04-httproute.yaml      # Route to expose the app
+```
+
 ## Prerequisites
 
 Install Envoy Gateway via ArgoCD:
@@ -19,6 +29,7 @@ kubectl wait --for=condition=Available deployment/envoy-gateway -n envoy-gateway
 
 ```bash
 # Apply in order
+kubectl apply -f 02-envoy-proxy.yaml
 kubectl apply -f 01-gateway-class.yaml
 kubectl apply -f 02-gateway.yaml
 kubectl apply -f 03-sample-app.yaml
@@ -36,8 +47,14 @@ kubectl apply -f .
 # Check GatewayClass
 kubectl get gatewayclass eg
 
+# Check EnvoyProxy
+kubectl get envoyproxy -n envoy-gateway-system
+
 # Check Gateway (wait for Address)
 kubectl get gateway eg -n envoy-gateway-system
+
+# Check Envoy pods have security context
+kubectl get pods -n envoy-gateway-system -l gateway.envoyproxy.io/owning-gateway-name=eg -o yaml | grep -A20 securityContext
 
 # Check HTTPRoute
 kubectl get httproute -n demo
