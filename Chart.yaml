@@ -1,0 +1,12 @@
+apiVersion: v2
+name: envoy-gateway-argocd
+description: Envoy Gateway with ArgoCD ingress configuration
+type: application
+version: 1.0.0
+appVersion: "1.6.1"
+
+dependencies:
+  - name: gateway-helm
+    version: v1.6.1
+    repository: oci://docker.io/envoyproxy
+    alias: envoy-gateway

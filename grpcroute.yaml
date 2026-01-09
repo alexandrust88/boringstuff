@@ -1,0 +1,19 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: argocd-grpc
+  namespace: argocd
+spec:
+  parentRefs:
+    - name: argocd-gateway
+      sectionName: https
+  hostnames:
+    - "argocd.example.com"  # CHANGE THIS
+  rules:
+    - matches:
+        - method:
+            service: "*"
+            method: "*"
+      backendRefs:
+        - name: argocd-server
+          port: 80

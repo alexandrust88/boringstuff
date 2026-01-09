@@ -1,0 +1,31 @@
+{{- if and .Values.tls.enabled .Values.tls.certificate.enabled }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "argocd-envoy.fullname" . }}
+  namespace: {{ include "argocd-envoy.gatewayNamespace" . }}
+  labels:
+    {{- include "argocd-envoy.labels" . | nindent 4 }}
+spec:
+  secretName: {{ .Values.tls.secretName }}
+  duration: {{ .Values.tls.certificate.duration | default "2160h" }}
+  renewBefore: {{ .Values.tls.certificate.renewBefore | default "360h" }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  usages:
+    - server auth
+    - digital signature
+    - key encipherment
+  dnsNames:
+    - {{ .Values.hostname }}
+    {{- range .Values.tls.certificate.dnsNames }}
+    - {{ . }}
+    {{- end }}
+  issuerRef:
+    name: {{ .Values.tls.certificate.issuerRef.name }}
+    kind: {{ .Values.tls.certificate.issuerRef.kind | default "ClusterIssuer" }}
+    {{- if .Values.tls.certificate.issuerRef.group }}
+    group: {{ .Values.tls.certificate.issuerRef.group }}
+    {{- end }}
+{{- end }}

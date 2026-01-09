@@ -1,0 +1,354 @@
+# Base values for Envoy Gateway wrapper chart
+# This chart wraps the upstream Envoy Gateway Helm chart with Azure-specific configurations
+
+# Override chart name/fullname
+nameOverride: ""
+fullnameOverride: ""
+namespaceOverride: ""
+
+# Service account configuration
+serviceAccount:
+  create: true
+  name: ""
+
+# Global settings
+global:
+  # Cluster identifier - used for naming and tagging resources
+  clusterName: ""
+  # Environment: staging, prod
+  environment: ""
+  # Azure resource group containing the static IPs
+  azureResourceGroup: ""
+
+# Envoy Gateway upstream chart configuration
+envoy-gateway:
+  # Deployment configuration
+  deployment:
+    envoyGateway:
+      image:
+        repository: docker.io/envoyproxy/gateway
+        tag: ""  # Uses appVersion by default
+        pullPolicy: IfNotPresent
+
+      # Resource configuration for the Envoy Gateway controller
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          cpu: 500m
+          memory: 1Gi
+
+      # Replica count for the controller
+      replicas: 2
+
+      # Pod disruption budget
+      podDisruptionBudget:
+        minAvailable: 1
+
+  # Envoy Gateway configuration
+  config:
+    envoyGateway:
+      # Gateway controller name
+      gateway:
+        controllerName: gateway.envoyproxy.io/gatewayclass-controller
+
+      # Provider configuration
+      provider:
+        type: Kubernetes
+        kubernetes:
+          # Rate limit configuration
+          rateLimitDeployment:
+            container:
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                limits:
+                  cpu: 200m
+                  memory: 256Mi
+
+          # Envoy Proxy configuration
+          envoyDeployment:
+            replicas: 2
+            pod:
+              annotations: {}
+              labels: {}
+            container:
+              resources:
+                requests:
+                  cpu: 200m
+                  memory: 256Mi
+                limits:
+                  cpu: 1000m
+                  memory: 1Gi
+
+          # Envoy Service configuration for Azure LoadBalancer
+          # NOTE: Azure annotations are applied via templates using azure.loadBalancer.* values
+          envoyService:
+            type: LoadBalancer
+            externalTrafficPolicy: Local
+
+          # Horizontal Pod Autoscaler for Envoy
+          envoyHpa:
+            minReplicas: 2
+            maxReplicas: 10
+            metrics:
+              - type: Resource
+                resource:
+                  name: cpu
+                  target:
+                    type: Utilization
+                    averageUtilization: 80
+
+# Azure LoadBalancer configuration
+# Override these per-cluster
+azure:
+  loadBalancer:
+    # Enable Azure LoadBalancer annotations
+    enabled: true
+    # Resource group containing the static public IPs
+    resourceGroup: ""
+    # Static public IP address (must be pre-provisioned)
+    staticIP: ""
+    # DNS label for the load balancer
+    dnsLabel: ""
+    # Health probe path
+    healthProbeRequestPath: "/ready"
+    # Internal load balancer (true for internal, false for public)
+    internal: false
+    # TCP idle timeout in seconds
+    idleTimeout: "30"
+
+# Cluster-specific configurations
+# These are placeholder values for 60 cluster deployments
+# Override in environment-specific values files
+clusters:
+  # Example cluster configuration
+  # cluster-001:
+  #   staticIP: "20.x.x.x"
+  #   dnsLabel: "cluster-001-gateway"
+  #   resourceGroup: "rg-cluster-001-networking"
+
+  # Cluster 001-010 (Region 1)
+  cluster-001: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-002: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-003: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-004: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-005: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-006: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-007: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-008: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-009: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-010: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+
+  # Cluster 011-020 (Region 2)
+  cluster-011: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-012: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-013: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-014: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-015: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-016: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-017: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-018: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-019: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-020: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+
+  # Cluster 021-030 (Region 3)
+  cluster-021: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-022: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-023: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-024: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-025: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-026: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-027: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-028: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-029: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-030: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+
+  # Cluster 031-040 (Region 4)
+  cluster-031: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-032: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-033: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-034: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-035: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-036: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-037: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-038: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-039: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-040: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+
+  # Cluster 041-050 (Region 5)
+  cluster-041: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-042: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-043: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-044: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-045: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-046: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-047: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-048: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-049: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-050: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+
+  # Cluster 051-060 (Region 6)
+  cluster-051: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-052: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-053: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-054: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-055: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-056: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-057: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-058: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-059: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+  cluster-060: { staticIP: "", dnsLabel: "", resourceGroup: "" }
+
+# Monitoring and observability
+monitoring:
+  enabled: true
+  serviceMonitor:
+    enabled: false
+    namespace: ""
+    interval: 30s
+    scrapeTimeout: 10s
+
+# Network policies
+networkPolicies:
+  enabled: false
+
+# Pod security standards
+podSecurityStandards:
+  enabled: true
+  level: restricted
+
+# GatewayClass configuration
+gatewayClass:
+  create: true
+  name: envoy
+  annotations: {}
+  parametersRef: {}
+    # group: gateway.envoyproxy.io
+    # kind: EnvoyProxy
+    # name: envoy-proxy-config
+
+# Gateway configuration
+gateway:
+  create: true
+  name: envoy-gateway
+  annotations: {}
+  infrastructure: {}
+  listeners:
+    http:
+      enabled: true
+      port: 80
+      hostname: ""  # Empty means all hostnames
+      allowedRoutes:
+        namespaces:
+          from: All
+    https:
+      enabled: true
+      port: 443
+      hostname: ""
+      certificateRefs:
+        - kind: Secret
+          name: gateway-tls
+      allowedRoutes:
+        namespaces:
+          from: All
+  extraListeners: []
+
+# EnvoyProxy configuration (advanced)
+envoyProxy:
+  create: true
+  name: envoy-proxy-config
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  annotations: {}
+  labels: {}
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  affinity: {}
+  tolerations: []
+  topologySpreadConstraints: []
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  env: []
+  service:
+    type: LoadBalancer
+    annotations: {}
+    externalTrafficPolicy: Local
+  logging:
+    level:
+      default: warn
+  telemetry:
+    accessLog:
+      settings:
+        - format:
+            type: JSON
+            json:
+              start_time: "%START_TIME%"
+              method: "%REQ(:METHOD)%"
+              path: "%REQ(X-ENVOY-ORIGINAL-PATH?:PATH)%"
+              protocol: "%PROTOCOL%"
+              response_code: "%RESPONSE_CODE%"
+              response_flags: "%RESPONSE_FLAGS%"
+              bytes_received: "%BYTES_RECEIVED%"
+              bytes_sent: "%BYTES_SENT%"
+              duration: "%DURATION%"
+              upstream_service_time: "%RESP(X-ENVOY-UPSTREAM-SERVICE-TIME)%"
+              x_forwarded_for: "%REQ(X-FORWARDED-FOR)%"
+              user_agent: "%REQ(USER-AGENT)%"
+              request_id: "%REQ(X-REQUEST-ID)%"
+              authority: "%REQ(:AUTHORITY)%"
+              upstream_host: "%UPSTREAM_HOST%"
+              upstream_cluster: "%UPSTREAM_CLUSTER%"
+    metrics:
+      prometheus: {}
+
+# HTTP to HTTPS redirect
+httpRedirect:
+  enabled: true
+  name: http-to-https-redirect
+  hostnames: []
+  statusCode: 301
+
+# Client Traffic Policy
+clientTrafficPolicy:
+  enabled: false
+  name: default-client-policy
+  timeout:
+    http:
+      requestReceivedTimeout: 30s
+  tcpKeepalive:
+    probes: 3
+    idleTime: 60s
+    interval: 30s
+  tls:
+    minVersion: "1.2"
+    ciphers:
+      - ECDHE-ECDSA-AES128-GCM-SHA256
+      - ECDHE-RSA-AES128-GCM-SHA256
+      - ECDHE-ECDSA-AES256-GCM-SHA384
+      - ECDHE-RSA-AES256-GCM-SHA384
+  headers:
+    enableEnvoyHeaders: false
+
+# Security Policy
+securityPolicy:
+  enabled: false
+  name: default-security-policy
+  cors: {}
+  basicAuth: {}
+  oidc: {}
+  jwt: {}
+  extAuth: {}
+

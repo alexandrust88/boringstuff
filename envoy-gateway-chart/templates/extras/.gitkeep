@@ -1,0 +1,9 @@
+# This directory is for custom overlay templates
+# Add any additional Kubernetes resources here that should be deployed alongside Envoy Gateway
+#
+# Examples:
+# - custom-gateway.yaml - Custom Gateway resources
+# - custom-httproute.yaml - Custom HTTPRoute resources
+# - networkpolicy.yaml - Network policies
+# - servicemonitor.yaml - Prometheus ServiceMonitor
+# - poddisruptionbudget.yaml - Additional PDBs

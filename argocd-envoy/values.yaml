@@ -1,0 +1,93 @@
+# ArgoCD Envoy Gateway HTTPRoute Configuration
+
+# Override chart name/fullname
+nameOverride: ""
+fullnameOverride: ""
+
+# REQUIRED: Change this to your actual ArgoCD hostname
+hostname: argocd.example.com
+
+# Gateway reference
+gateway:
+  name: envoy-gateway
+  namespace: envoy-gateway-system
+
+# TLS Configuration with cert-manager
+tls:
+  enabled: true
+  # Secret name for the TLS certificate
+  # cert-manager will create this secret
+  secretName: argocd-tls
+  # cert-manager Certificate configuration
+  certificate:
+    enabled: true
+    # Issuer reference
+    issuerRef:
+      name: letsencrypt-prod
+      kind: ClusterIssuer
+      # Use 'Issuer' for namespace-scoped issuers
+      # kind: Issuer
+    # Additional DNS names (optional)
+    dnsNames: []
+    # Certificate duration (default 90 days)
+    duration: 2160h  # 90 days
+    # Renew before expiry
+    renewBefore: 360h  # 15 days
+
+# HTTP to HTTPS redirect
+httpRedirect:
+  enabled: true
+  statusCode: 301
+
+# ArgoCD Server Service
+service:
+  name: argocd-server
+  namespace: argocd
+  # Port for HTTPS backend
+  port: 443
+
+# gRPC support for ArgoCD CLI
+grpc:
+  enabled: true
+  # Port for gRPC (ArgoCD uses same port)
+  port: 443
+
+# Timeouts
+timeouts:
+  # Request timeout for long operations (app sync, etc)
+  request: 300s
+  backendRequest: 300s
+
+# Health check configuration
+healthCheck:
+  enabled: true
+  path: /healthz
+  interval: 10s
+  timeout: 5s
+  healthyThreshold: 1
+  unhealthyThreshold: 3
+
+# Rate limiting (optional)
+rateLimit:
+  enabled: false
+  requestsPerUnit: 100
+  # Valid units: second, minute, hour
+  unit: minute
+
+# Security headers
+securityHeaders:
+  enabled: true
+  headers:
+    X-Frame-Options: DENY
+    X-Content-Type-Options: nosniff
+    X-XSS-Protection: "1; mode=block"
+    Referrer-Policy: strict-origin-when-cross-origin
+    # Strict-Transport-Security added automatically with TLS
+
+# Environment-specific overrides
+# Staging example:
+# hostname: argocd-staging.example.com
+# tls:
+#   certificate:
+#     issuerRef:
+#       name: letsencrypt-staging

@@ -1,0 +1,37 @@
+{{- if or .Values.healthCheck.enabled .Values.rateLimit.enabled }}
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: {{ include "argocd-envoy.fullname" . }}
+  namespace: {{ include "argocd-envoy.gatewayNamespace" . }}
+  labels:
+    {{- include "argocd-envoy.labels" . | nindent 4 }}
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: {{ include "argocd-envoy.fullname" . }}
+  {{- if .Values.healthCheck.enabled }}
+  healthCheck:
+    active:
+      type: HTTP
+      http:
+        path: {{ .Values.healthCheck.path | default "/healthz" }}
+        expectedStatuses:
+          - start: 200
+            end: 200
+      interval: {{ .Values.healthCheck.interval | default "10s" }}
+      timeout: {{ .Values.healthCheck.timeout | default "5s" }}
+      healthyThreshold: {{ .Values.healthCheck.healthyThreshold | default 1 }}
+      unhealthyThreshold: {{ .Values.healthCheck.unhealthyThreshold | default 3 }}
+  {{- end }}
+  {{- if .Values.rateLimit.enabled }}
+  rateLimit:
+    type: Local
+    local:
+      rules:
+        - limit:
+            requests: {{ .Values.rateLimit.requestsPerUnit | default 100 }}
+            unit: {{ .Values.rateLimit.unit | default "minute" }}
+  {{- end }}
+{{- end }}

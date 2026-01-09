@@ -1,0 +1,94 @@
+{{- if .Values.securityPolicy.enabled }}
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: {{ .Values.securityPolicy.name | default "default-security-policy" }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "envoy-gateway-wrapper.labels" . | nindent 4 }}
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: {{ .Values.gateway.name | default "envoy-gateway" }}
+    namespace: {{ .Release.Namespace }}
+  {{- if and .Values.securityPolicy.cors .Values.securityPolicy.cors.allowOrigins }}
+  cors:
+    allowOrigins:
+      {{- toYaml .Values.securityPolicy.cors.allowOrigins | nindent 6 }}
+    {{- if .Values.securityPolicy.cors.allowMethods }}
+    allowMethods:
+      {{- toYaml .Values.securityPolicy.cors.allowMethods | nindent 6 }}
+    {{- end }}
+    {{- if .Values.securityPolicy.cors.allowHeaders }}
+    allowHeaders:
+      {{- toYaml .Values.securityPolicy.cors.allowHeaders | nindent 6 }}
+    {{- end }}
+    {{- if .Values.securityPolicy.cors.exposeHeaders }}
+    exposeHeaders:
+      {{- toYaml .Values.securityPolicy.cors.exposeHeaders | nindent 6 }}
+    {{- end }}
+    {{- if .Values.securityPolicy.cors.maxAge }}
+    maxAge: {{ .Values.securityPolicy.cors.maxAge }}
+    {{- end }}
+    {{- if .Values.securityPolicy.cors.allowCredentials }}
+    allowCredentials: {{ .Values.securityPolicy.cors.allowCredentials }}
+    {{- end }}
+  {{- end }}
+  {{- if and .Values.securityPolicy.basicAuth .Values.securityPolicy.basicAuth.secretName }}
+  basicAuth:
+    users:
+      name: {{ .Values.securityPolicy.basicAuth.secretName }}
+  {{- end }}
+  {{- if and .Values.securityPolicy.oidc .Values.securityPolicy.oidc.issuer .Values.securityPolicy.oidc.clientID }}
+  oidc:
+    provider:
+      issuer: {{ .Values.securityPolicy.oidc.issuer }}
+    clientID: {{ .Values.securityPolicy.oidc.clientID }}
+    clientSecret:
+      name: {{ .Values.securityPolicy.oidc.clientSecretName }}
+    {{- if .Values.securityPolicy.oidc.scopes }}
+    scopes:
+      {{- toYaml .Values.securityPolicy.oidc.scopes | nindent 6 }}
+    {{- end }}
+    redirectURL: {{ .Values.securityPolicy.oidc.redirectURL | default "/oauth2/callback" }}
+    logoutPath: {{ .Values.securityPolicy.oidc.logoutPath | default "/oauth2/logout" }}
+  {{- end }}
+  {{- if and .Values.securityPolicy.jwt .Values.securityPolicy.jwt.providers }}
+  jwt:
+    providers:
+      {{- range .Values.securityPolicy.jwt.providers }}
+      - name: {{ .name }}
+        issuer: {{ .issuer }}
+        {{- if .audiences }}
+        audiences:
+          {{- toYaml .audiences | nindent 10 }}
+        {{- end }}
+        remoteJWKS:
+          uri: {{ .remoteJWKS.uri }}
+        {{- if .claimToHeaders }}
+        claimToHeaders:
+          {{- toYaml .claimToHeaders | nindent 10 }}
+        {{- end }}
+      {{- end }}
+  {{- end }}
+  {{- if and .Values.securityPolicy.extAuth .Values.securityPolicy.extAuth.http .Values.securityPolicy.extAuth.http.service }}
+  extAuth:
+    http:
+      backendRef:
+        name: {{ .Values.securityPolicy.extAuth.http.service }}
+        namespace: {{ .Values.securityPolicy.extAuth.http.namespace | default .Release.Namespace }}
+        port: {{ .Values.securityPolicy.extAuth.http.port | default 80 }}
+      {{- if .Values.securityPolicy.extAuth.http.headersToBackend }}
+      headersToBackend:
+        {{- toYaml .Values.securityPolicy.extAuth.http.headersToBackend | nindent 8 }}
+      {{- end }}
+  {{- else if and .Values.securityPolicy.extAuth .Values.securityPolicy.extAuth.grpc .Values.securityPolicy.extAuth.grpc.service }}
+  extAuth:
+    grpc:
+      backendRef:
+        name: {{ .Values.securityPolicy.extAuth.grpc.service }}
+        namespace: {{ .Values.securityPolicy.extAuth.grpc.namespace | default .Release.Namespace }}
+        port: {{ .Values.securityPolicy.extAuth.grpc.port | default 9090 }}
+  {{- end }}
+{{- end }}

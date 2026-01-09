@@ -1,0 +1,22 @@
+# Staging environment values
+# IMPORTANT: Override hostname with --set hostname=argocd-staging.yourdomain.com
+
+# hostname: ""  # Must be set via --set or overlay
+
+tls:
+  enabled: true
+  secretName: argocd-staging-tls
+  certificate:
+    enabled: true
+    issuerRef:
+      name: letsencrypt-staging
+      kind: ClusterIssuer
+
+# Lower timeouts for staging
+timeouts:
+  request: 60s
+  backendRequest: 60s
+
+# Disable rate limiting in staging
+rateLimit:
+  enabled: false

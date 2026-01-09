@@ -1,0 +1,21 @@
+{{- if .Values.gatewayClass.create }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: {{ .Values.gatewayClass.name | default "envoy" }}
+  labels:
+    {{- include "envoy-gateway-wrapper.labels" . | nindent 4 }}
+  {{- with .Values.gatewayClass.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+  {{- if .Values.gatewayClass.parametersRef }}
+  parametersRef:
+    group: {{ .Values.gatewayClass.parametersRef.group | default "gateway.envoyproxy.io" }}
+    kind: {{ .Values.gatewayClass.parametersRef.kind | default "EnvoyProxy" }}
+    name: {{ .Values.gatewayClass.parametersRef.name }}
+    namespace: {{ .Values.gatewayClass.parametersRef.namespace | default .Release.Namespace }}
+  {{- end }}
+{{- end }}

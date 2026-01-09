@@ -1,0 +1,215 @@
+# Production environment overrides for Envoy Gateway
+# Use: helm upgrade --install envoy-gateway . -f values.yaml -f values-prod.yaml
+
+global:
+  environment: prod
+
+# Production-grade Envoy Gateway configuration
+envoy-gateway:
+  deployment:
+    envoyGateway:
+      # Higher replica count for production
+      replicas: 3
+
+      # Production resource allocation
+      resources:
+        requests:
+          cpu: 250m
+          memory: 512Mi
+        limits:
+          cpu: 1000m
+          memory: 2Gi
+
+      # Pod disruption budget for high availability
+      podDisruptionBudget:
+        minAvailable: 2
+
+  config:
+    envoyGateway:
+      provider:
+        kubernetes:
+          # Production Envoy Proxy configuration
+          envoyDeployment:
+            replicas: 3
+            pod:
+              annotations:
+                prometheus.io/scrape: "true"
+                prometheus.io/port: "19001"
+                prometheus.io/path: "/stats/prometheus"
+              labels:
+                app.kubernetes.io/part-of: envoy-gateway
+                environment: production
+              # Anti-affinity for spreading across nodes
+              affinity:
+                podAntiAffinity:
+                  requiredDuringSchedulingIgnoredDuringExecution:
+                    - labelSelector:
+                        matchLabels:
+                          app.kubernetes.io/name: envoy
+                      topologyKey: kubernetes.io/hostname
+                  preferredDuringSchedulingIgnoredDuringExecution:
+                    - weight: 100
+                      podAffinityTerm:
+                        labelSelector:
+                          matchLabels:
+                            app.kubernetes.io/name: envoy
+                        topologyKey: topology.kubernetes.io/zone
+              # Topology spread constraints for zone distribution
+              topologySpreadConstraints:
+                - maxSkew: 1
+                  topologyKey: topology.kubernetes.io/zone
+                  whenUnsatisfiable: ScheduleAnyway
+                  labelSelector:
+                    matchLabels:
+                      app.kubernetes.io/name: envoy
+            container:
+              resources:
+                requests:
+                  cpu: 500m
+                  memory: 512Mi
+                limits:
+                  cpu: 2000m
+                  memory: 2Gi
+
+          # Rate limiter for production
+          rateLimitDeployment:
+            replicas: 2
+            container:
+              resources:
+                requests:
+                  cpu: 200m
+                  memory: 256Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+
+          # Production HPA settings
+          envoyHpa:
+            minReplicas: 3
+            maxReplicas: 20
+            metrics:
+              - type: Resource
+                resource:
+                  name: cpu
+                  target:
+                    type: Utilization
+                    averageUtilization: 70
+              - type: Resource
+                resource:
+                  name: memory
+                  target:
+                    type: Utilization
+                    averageUtilization: 80
+
+          # Azure LoadBalancer production settings
+          envoyService:
+            type: LoadBalancer
+            annotations:
+              service.beta.kubernetes.io/azure-load-balancer-tcp-idle-timeout: "30"
+              service.beta.kubernetes.io/azure-load-balancer-disable-tcp-reset: "false"
+            externalTrafficPolicy: Local
+
+# Azure production configuration
+azure:
+  loadBalancer:
+    internal: false
+    idleTimeoutMinutes: 30
+
+# Monitoring enabled for production
+monitoring:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    namespace: monitoring
+    interval: 15s
+    scrapeTimeout: 10s
+
+# Network policies enabled for production
+networkPolicies:
+  enabled: true
+
+# Pod security standards
+podSecurityStandards:
+  enabled: true
+  level: restricted
+
+# Production cluster configurations
+# Fill in actual values for each production cluster
+clusters:
+  # Example production cluster with actual values
+  # cluster-001:
+  #   staticIP: "20.123.45.67"
+  #   dnsLabel: "prod-cluster-001-gateway"
+  #   resourceGroup: "rg-prod-networking-eastus"
+
+  # Region 1 - East US Production
+  cluster-001: { staticIP: "", dnsLabel: "prod-c001-gw", resourceGroup: "rg-prod-networking-eastus" }
+  cluster-002: { staticIP: "", dnsLabel: "prod-c002-gw", resourceGroup: "rg-prod-networking-eastus" }
+  cluster-003: { staticIP: "", dnsLabel: "prod-c003-gw", resourceGroup: "rg-prod-networking-eastus" }
+  cluster-004: { staticIP: "", dnsLabel: "prod-c004-gw", resourceGroup: "rg-prod-networking-eastus" }
+  cluster-005: { staticIP: "", dnsLabel: "prod-c005-gw", resourceGroup: "rg-prod-networking-eastus" }
+  cluster-006: { staticIP: "", dnsLabel: "prod-c006-gw", resourceGroup: "rg-prod-networking-eastus" }
+  cluster-007: { staticIP: "", dnsLabel: "prod-c007-gw", resourceGroup: "rg-prod-networking-eastus" }
+  cluster-008: { staticIP: "", dnsLabel: "prod-c008-gw", resourceGroup: "rg-prod-networking-eastus" }
+  cluster-009: { staticIP: "", dnsLabel: "prod-c009-gw", resourceGroup: "rg-prod-networking-eastus" }
+  cluster-010: { staticIP: "", dnsLabel: "prod-c010-gw", resourceGroup: "rg-prod-networking-eastus" }
+
+  # Region 2 - West US Production
+  cluster-011: { staticIP: "", dnsLabel: "prod-c011-gw", resourceGroup: "rg-prod-networking-westus" }
+  cluster-012: { staticIP: "", dnsLabel: "prod-c012-gw", resourceGroup: "rg-prod-networking-westus" }
+  cluster-013: { staticIP: "", dnsLabel: "prod-c013-gw", resourceGroup: "rg-prod-networking-westus" }
+  cluster-014: { staticIP: "", dnsLabel: "prod-c014-gw", resourceGroup: "rg-prod-networking-westus" }
+  cluster-015: { staticIP: "", dnsLabel: "prod-c015-gw", resourceGroup: "rg-prod-networking-westus" }
+  cluster-016: { staticIP: "", dnsLabel: "prod-c016-gw", resourceGroup: "rg-prod-networking-westus" }
+  cluster-017: { staticIP: "", dnsLabel: "prod-c017-gw", resourceGroup: "rg-prod-networking-westus" }
+  cluster-018: { staticIP: "", dnsLabel: "prod-c018-gw", resourceGroup: "rg-prod-networking-westus" }
+  cluster-019: { staticIP: "", dnsLabel: "prod-c019-gw", resourceGroup: "rg-prod-networking-westus" }
+  cluster-020: { staticIP: "", dnsLabel: "prod-c020-gw", resourceGroup: "rg-prod-networking-westus" }
+
+  # Region 3 - North Europe Production
+  cluster-021: { staticIP: "", dnsLabel: "prod-c021-gw", resourceGroup: "rg-prod-networking-northeu" }
+  cluster-022: { staticIP: "", dnsLabel: "prod-c022-gw", resourceGroup: "rg-prod-networking-northeu" }
+  cluster-023: { staticIP: "", dnsLabel: "prod-c023-gw", resourceGroup: "rg-prod-networking-northeu" }
+  cluster-024: { staticIP: "", dnsLabel: "prod-c024-gw", resourceGroup: "rg-prod-networking-northeu" }
+  cluster-025: { staticIP: "", dnsLabel: "prod-c025-gw", resourceGroup: "rg-prod-networking-northeu" }
+  cluster-026: { staticIP: "", dnsLabel: "prod-c026-gw", resourceGroup: "rg-prod-networking-northeu" }
+  cluster-027: { staticIP: "", dnsLabel: "prod-c027-gw", resourceGroup: "rg-prod-networking-northeu" }
+  cluster-028: { staticIP: "", dnsLabel: "prod-c028-gw", resourceGroup: "rg-prod-networking-northeu" }
+  cluster-029: { staticIP: "", dnsLabel: "prod-c029-gw", resourceGroup: "rg-prod-networking-northeu" }
+  cluster-030: { staticIP: "", dnsLabel: "prod-c030-gw", resourceGroup: "rg-prod-networking-northeu" }
+
+  # Region 4 - West Europe Production
+  cluster-031: { staticIP: "", dnsLabel: "prod-c031-gw", resourceGroup: "rg-prod-networking-westeu" }
+  cluster-032: { staticIP: "", dnsLabel: "prod-c032-gw", resourceGroup: "rg-prod-networking-westeu" }
+  cluster-033: { staticIP: "", dnsLabel: "prod-c033-gw", resourceGroup: "rg-prod-networking-westeu" }
+  cluster-034: { staticIP: "", dnsLabel: "prod-c034-gw", resourceGroup: "rg-prod-networking-westeu" }
+  cluster-035: { staticIP: "", dnsLabel: "prod-c035-gw", resourceGroup: "rg-prod-networking-westeu" }
+  cluster-036: { staticIP: "", dnsLabel: "prod-c036-gw", resourceGroup: "rg-prod-networking-westeu" }
+  cluster-037: { staticIP: "", dnsLabel: "prod-c037-gw", resourceGroup: "rg-prod-networking-westeu" }
+  cluster-038: { staticIP: "", dnsLabel: "prod-c038-gw", resourceGroup: "rg-prod-networking-westeu" }
+  cluster-039: { staticIP: "", dnsLabel: "prod-c039-gw", resourceGroup: "rg-prod-networking-westeu" }
+  cluster-040: { staticIP: "", dnsLabel: "prod-c040-gw", resourceGroup: "rg-prod-networking-westeu" }
+
+  # Region 5 - Southeast Asia Production
+  cluster-041: { staticIP: "", dnsLabel: "prod-c041-gw", resourceGroup: "rg-prod-networking-seasia" }
+  cluster-042: { staticIP: "", dnsLabel: "prod-c042-gw", resourceGroup: "rg-prod-networking-seasia" }
+  cluster-043: { staticIP: "", dnsLabel: "prod-c043-gw", resourceGroup: "rg-prod-networking-seasia" }
+  cluster-044: { staticIP: "", dnsLabel: "prod-c044-gw", resourceGroup: "rg-prod-networking-seasia" }
+  cluster-045: { staticIP: "", dnsLabel: "prod-c045-gw", resourceGroup: "rg-prod-networking-seasia" }
+  cluster-046: { staticIP: "", dnsLabel: "prod-c046-gw", resourceGroup: "rg-prod-networking-seasia" }
+  cluster-047: { staticIP: "", dnsLabel: "prod-c047-gw", resourceGroup: "rg-prod-networking-seasia" }
+  cluster-048: { staticIP: "", dnsLabel: "prod-c048-gw", resourceGroup: "rg-prod-networking-seasia" }
+  cluster-049: { staticIP: "", dnsLabel: "prod-c049-gw", resourceGroup: "rg-prod-networking-seasia" }
+  cluster-050: { staticIP: "", dnsLabel: "prod-c050-gw", resourceGroup: "rg-prod-networking-seasia" }
+
+  # Region 6 - Australia East Production
+  cluster-051: { staticIP: "", dnsLabel: "prod-c051-gw", resourceGroup: "rg-prod-networking-auseast" }
+  cluster-052: { staticIP: "", dnsLabel: "prod-c052-gw", resourceGroup: "rg-prod-networking-auseast" }
+  cluster-053: { staticIP: "", dnsLabel: "prod-c053-gw", resourceGroup: "rg-prod-networking-auseast" }
+  cluster-054: { staticIP: "", dnsLabel: "prod-c054-gw", resourceGroup: "rg-prod-networking-auseast" }
+  cluster-055: { staticIP: "", dnsLabel: "prod-c055-gw", resourceGroup: "rg-prod-networking-auseast" }
+  cluster-056: { staticIP: "", dnsLabel: "prod-c056-gw", resourceGroup: "rg-prod-networking-auseast" }
+  cluster-057: { staticIP: "", dnsLabel: "prod-c057-gw", resourceGroup: "rg-prod-networking-auseast" }
+  cluster-058: { staticIP: "", dnsLabel: "prod-c058-gw", resourceGroup: "rg-prod-networking-auseast" }
+  cluster-059: { staticIP: "", dnsLabel: "prod-c059-gw", resourceGroup: "rg-prod-networking-auseast" }
+  cluster-060: { staticIP: "", dnsLabel: "prod-c060-gw", resourceGroup: "rg-prod-networking-auseast" }

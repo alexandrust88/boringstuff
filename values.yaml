@@ -1,0 +1,29 @@
+# ArgoCD Gateway Configuration
+argocd:
+  hostname: argocd.example.com  # CHANGE THIS
+  tlsSecretName: argocd-server-tls
+  namespace: argocd
+
+# Rate limiting
+rateLimit:
+  enabled: true
+  requestsPerMinute: 100
+  loginRequestsPerMinute: 10
+
+# Timeouts
+timeout:
+  request: 300s
+  connection: 10s
+
+# Envoy Gateway upstream chart values
+envoy-gateway:
+  deployment:
+    envoyGateway:
+      replicas: 2
+      resources:
+        limits:
+          cpu: 500m
+          memory: 512Mi
+        requests:
+          cpu: 100m
+          memory: 128Mi

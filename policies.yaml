@@ -1,0 +1,88 @@
+# Client traffic policy - HTTP/2 for gRPC
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: ClientTrafficPolicy
+metadata:
+  name: argocd-client
+  namespace: argocd
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: argocd-gateway
+  http2:
+    initialStreamWindowSize: 65536
+    initialConnectionWindowSize: 1048576
+    maxConcurrentStreams: 100
+  tcpKeepalive:
+    idleTime: 60s
+    interval: 30s
+    probes: 3
+---
+# Backend traffic policy - timeouts and retries
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: argocd-backend
+  namespace: argocd
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: argocd-server
+  retry:
+    numRetries: 3
+    perRetry:
+      backOff:
+        baseInterval: 100ms
+        maxInterval: 1s
+      timeout: 10s
+    retryOn:
+      triggers:
+        - "5xx"
+        - "gateway-error"
+        - "reset"
+  timeout:
+    http:
+      requestTimeout: 300s
+      connectionIdleTimeout: 60s
+    tcp:
+      connectTimeout: 10s
+  healthCheck:
+    active:
+      type: HTTP
+      http:
+        path: /healthz
+        expectedStatuses:
+          - start: 200
+            end: 299
+      interval: 10s
+      timeout: 5s
+      unhealthyThreshold: 3
+      healthyThreshold: 2
+---
+# Rate limiting
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: argocd-ratelimit
+  namespace: argocd
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: argocd-server
+  rateLimit:
+    type: Local
+    local:
+      rules:
+        - limit:
+            requests: 100
+            unit: Minute
+        - clientSelectors:
+            - headers:
+                - name: ":path"
+                  type: Exact
+                  value: "/api/v1/session"
+          limit:
+            requests: 10
+            unit: Minute

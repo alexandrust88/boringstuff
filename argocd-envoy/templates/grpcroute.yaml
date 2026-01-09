@@ -1,0 +1,21 @@
+{{- if .Values.grpc.enabled }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: {{ include "argocd-envoy.fullname" . }}-grpc
+  namespace: {{ include "argocd-envoy.gatewayNamespace" . }}
+  labels:
+    {{- include "argocd-envoy.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ .Values.gateway.name }}
+      namespace: {{ include "argocd-envoy.gatewayNamespace" . }}
+      sectionName: https
+  hostnames:
+    - {{ .Values.hostname | quote }}
+  rules:
+    - backendRefs:
+        - name: {{ .Values.service.name }}
+          namespace: {{ include "argocd-envoy.serviceNamespace" . }}
+          port: {{ .Values.grpc.port | default .Values.service.port }}
+{{- end }}

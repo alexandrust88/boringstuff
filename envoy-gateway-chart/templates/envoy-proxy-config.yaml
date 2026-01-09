@@ -1,0 +1,111 @@
+{{- if .Values.envoyProxy.create }}
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: {{ .Values.envoyProxy.name | default "envoy-proxy-config" }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "envoy-gateway-wrapper.labels" . | nindent 4 }}
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyDeployment:
+        replicas: {{ .Values.envoyProxy.replicas | default 2 }}
+        {{- if .Values.envoyProxy.strategy }}
+        strategy:
+          {{- toYaml .Values.envoyProxy.strategy | nindent 10 }}
+        {{- end }}
+        pod:
+          {{- if .Values.envoyProxy.annotations }}
+          annotations:
+            {{- toYaml .Values.envoyProxy.annotations | nindent 12 }}
+          {{- end }}
+          {{- if .Values.envoyProxy.labels }}
+          labels:
+            {{- toYaml .Values.envoyProxy.labels | nindent 12 }}
+          {{- end }}
+          {{- if .Values.envoyProxy.affinity }}
+          affinity:
+            {{- toYaml .Values.envoyProxy.affinity | nindent 12 }}
+          {{- end }}
+          {{- if .Values.envoyProxy.tolerations }}
+          tolerations:
+            {{- toYaml .Values.envoyProxy.tolerations | nindent 12 }}
+          {{- end }}
+          {{- if .Values.envoyProxy.topologySpreadConstraints }}
+          topologySpreadConstraints:
+            {{- toYaml .Values.envoyProxy.topologySpreadConstraints | nindent 12 }}
+          {{- end }}
+          {{- if .Values.envoyProxy.securityContext }}
+          securityContext:
+            {{- toYaml .Values.envoyProxy.securityContext | nindent 12 }}
+          {{- end }}
+        container:
+          {{- if .Values.envoyProxy.resources }}
+          resources:
+            {{- toYaml .Values.envoyProxy.resources | nindent 12 }}
+          {{- end }}
+          {{- if .Values.envoyProxy.env }}
+          env:
+            {{- toYaml .Values.envoyProxy.env | nindent 12 }}
+          {{- end }}
+      envoyService:
+        type: {{ .Values.envoyProxy.service.type | default "LoadBalancer" }}
+        {{- if .Values.envoyProxy.service.annotations }}
+        annotations:
+          {{- /* Merge Azure LB annotations if enabled */ -}}
+          {{- if .Values.azure.loadBalancer.enabled }}
+          service.beta.kubernetes.io/azure-load-balancer-resource-group: {{ .Values.azure.loadBalancer.resourceGroup | quote }}
+          {{- if .Values.azure.loadBalancer.staticIP }}
+          service.beta.kubernetes.io/azure-load-balancer-ipv4: {{ .Values.azure.loadBalancer.staticIP | quote }}
+          {{- end }}
+          {{- if .Values.azure.loadBalancer.dnsLabel }}
+          service.beta.kubernetes.io/azure-dns-label-name: {{ .Values.azure.loadBalancer.dnsLabel | quote }}
+          {{- end }}
+          {{- if .Values.azure.loadBalancer.healthProbeRequestPath }}
+          service.beta.kubernetes.io/azure-load-balancer-health-probe-request-path: {{ .Values.azure.loadBalancer.healthProbeRequestPath | quote }}
+          {{- end }}
+          {{- if .Values.azure.loadBalancer.internal }}
+          service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+          {{- end }}
+          {{- if .Values.azure.loadBalancer.idleTimeout }}
+          service.beta.kubernetes.io/azure-load-balancer-tcp-idle-timeout: {{ .Values.azure.loadBalancer.idleTimeout | quote }}
+          {{- end }}
+          {{- end }}
+          {{- toYaml .Values.envoyProxy.service.annotations | nindent 10 }}
+        {{- else if .Values.azure.loadBalancer.enabled }}
+        annotations:
+          service.beta.kubernetes.io/azure-load-balancer-resource-group: {{ .Values.azure.loadBalancer.resourceGroup | quote }}
+          {{- if .Values.azure.loadBalancer.staticIP }}
+          service.beta.kubernetes.io/azure-load-balancer-ipv4: {{ .Values.azure.loadBalancer.staticIP | quote }}
+          {{- end }}
+          {{- if .Values.azure.loadBalancer.dnsLabel }}
+          service.beta.kubernetes.io/azure-dns-label-name: {{ .Values.azure.loadBalancer.dnsLabel | quote }}
+          {{- end }}
+          {{- if .Values.azure.loadBalancer.healthProbeRequestPath }}
+          service.beta.kubernetes.io/azure-load-balancer-health-probe-request-path: {{ .Values.azure.loadBalancer.healthProbeRequestPath | quote }}
+          {{- end }}
+          {{- if .Values.azure.loadBalancer.internal }}
+          service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+          {{- end }}
+          {{- if .Values.azure.loadBalancer.idleTimeout }}
+          service.beta.kubernetes.io/azure-load-balancer-tcp-idle-timeout: {{ .Values.azure.loadBalancer.idleTimeout | quote }}
+          {{- end }}
+        {{- end }}
+        {{- if .Values.envoyProxy.service.externalTrafficPolicy }}
+        externalTrafficPolicy: {{ .Values.envoyProxy.service.externalTrafficPolicy }}
+        {{- end }}
+  {{- if .Values.envoyProxy.logging }}
+  logging:
+    {{- toYaml .Values.envoyProxy.logging | nindent 4 }}
+  {{- end }}
+  {{- if .Values.envoyProxy.telemetry }}
+  telemetry:
+    {{- toYaml .Values.envoyProxy.telemetry | nindent 4 }}
+  {{- end }}
+  {{- if .Values.envoyProxy.bootstrap }}
+  bootstrap:
+    {{- toYaml .Values.envoyProxy.bootstrap | nindent 4 }}
+  {{- end }}
+{{- end }}

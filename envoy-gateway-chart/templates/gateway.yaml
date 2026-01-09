@@ -1,0 +1,96 @@
+{{- if .Values.gateway.create }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: {{ .Values.gateway.name | default "envoy-gateway" }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "envoy-gateway-wrapper.labels" . | nindent 4 }}
+  annotations:
+    {{- /* Azure LoadBalancer annotations for static IP */ -}}
+    {{- if .Values.azure.loadBalancer.enabled }}
+    service.beta.kubernetes.io/azure-load-balancer-resource-group: {{ .Values.azure.loadBalancer.resourceGroup | quote }}
+    {{- if .Values.azure.loadBalancer.staticIP }}
+    service.beta.kubernetes.io/azure-load-balancer-ipv4: {{ .Values.azure.loadBalancer.staticIP | quote }}
+    {{- end }}
+    {{- if .Values.azure.loadBalancer.dnsLabel }}
+    service.beta.kubernetes.io/azure-dns-label-name: {{ .Values.azure.loadBalancer.dnsLabel | quote }}
+    {{- end }}
+    {{- if .Values.azure.loadBalancer.healthProbeRequestPath }}
+    service.beta.kubernetes.io/azure-load-balancer-health-probe-request-path: {{ .Values.azure.loadBalancer.healthProbeRequestPath | quote }}
+    {{- end }}
+    {{- if .Values.azure.loadBalancer.internal }}
+    service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+    {{- end }}
+    {{- if .Values.azure.loadBalancer.idleTimeout }}
+    service.beta.kubernetes.io/azure-load-balancer-tcp-idle-timeout: {{ .Values.azure.loadBalancer.idleTimeout | quote }}
+    {{- end }}
+    {{- end }}
+    {{- with .Values.gateway.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  gatewayClassName: {{ .Values.gatewayClass.name | default "envoy" }}
+  {{- if .Values.gateway.infrastructure }}
+  infrastructure:
+    {{- toYaml .Values.gateway.infrastructure | nindent 4 }}
+  {{- end }}
+  listeners:
+    {{- if .Values.gateway.listeners.http.enabled }}
+    - name: http
+      protocol: HTTP
+      port: {{ .Values.gateway.listeners.http.port | default 80 }}
+      {{- if .Values.gateway.listeners.http.hostname }}
+      hostname: {{ .Values.gateway.listeners.http.hostname | quote }}
+      {{- end }}
+      allowedRoutes:
+        namespaces:
+          from: {{ .Values.gateway.listeners.http.allowedRoutes.namespaces.from | default "All" }}
+          {{- if eq (default "All" .Values.gateway.listeners.http.allowedRoutes.namespaces.from) "Selector" }}
+          selector:
+            {{- toYaml .Values.gateway.listeners.http.allowedRoutes.namespaces.selector | nindent 12 }}
+          {{- end }}
+    {{- end }}
+    {{- if .Values.gateway.listeners.https.enabled }}
+    - name: https
+      protocol: HTTPS
+      port: {{ .Values.gateway.listeners.https.port | default 443 }}
+      {{- if .Values.gateway.listeners.https.hostname }}
+      hostname: {{ .Values.gateway.listeners.https.hostname | quote }}
+      {{- end }}
+      tls:
+        mode: Terminate
+        certificateRefs:
+          {{- range .Values.gateway.listeners.https.certificateRefs }}
+          - kind: {{ .kind | default "Secret" }}
+            name: {{ .name }}
+            {{- if .namespace }}
+            namespace: {{ .namespace }}
+            {{- end }}
+          {{- end }}
+      allowedRoutes:
+        namespaces:
+          from: {{ .Values.gateway.listeners.https.allowedRoutes.namespaces.from | default "All" }}
+          {{- if eq (default "All" .Values.gateway.listeners.https.allowedRoutes.namespaces.from) "Selector" }}
+          selector:
+            {{- toYaml .Values.gateway.listeners.https.allowedRoutes.namespaces.selector | nindent 12 }}
+          {{- end }}
+    {{- end }}
+    {{- /* Additional custom listeners */ -}}
+    {{- range .Values.gateway.extraListeners }}
+    - name: {{ .name }}
+      protocol: {{ .protocol }}
+      port: {{ .port }}
+      {{- if .hostname }}
+      hostname: {{ .hostname | quote }}
+      {{- end }}
+      {{- if .tls }}
+      tls:
+        {{- toYaml .tls | nindent 8 }}
+      {{- end }}
+      {{- if .allowedRoutes }}
+      allowedRoutes:
+        {{- toYaml .allowedRoutes | nindent 8 }}
+      {{- end }}
+    {{- end }}
+{{- end }}

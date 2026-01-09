@@ -1,0 +1,22 @@
+{{- if .Values.httpRedirect.enabled }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "argocd-envoy.fullname" . }}-redirect
+  namespace: {{ include "argocd-envoy.gatewayNamespace" . }}
+  labels:
+    {{- include "argocd-envoy.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ .Values.gateway.name }}
+      namespace: {{ include "argocd-envoy.gatewayNamespace" . }}
+      sectionName: http
+  hostnames:
+    - {{ .Values.hostname | quote }}
+  rules:
+    - filters:
+        - type: RequestRedirect
+          requestRedirect:
+            scheme: https
+            statusCode: {{ .Values.httpRedirect.statusCode | default 301 }}
+{{- end }}

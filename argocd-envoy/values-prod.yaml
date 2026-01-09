@@ -1,0 +1,34 @@
+# Production environment values
+# IMPORTANT: Override hostname with --set hostname=argocd.yourdomain.com
+
+# hostname: ""  # Must be set via --set or overlay
+
+tls:
+  enabled: true
+  secretName: argocd-tls
+  certificate:
+    enabled: true
+    issuerRef:
+      name: letsencrypt-prod
+      kind: ClusterIssuer
+
+# Production timeouts
+timeouts:
+  request: 300s
+  backendRequest: 300s
+
+# Enable rate limiting in production
+rateLimit:
+  enabled: true
+  requestsPerUnit: 100
+  unit: minute
+
+# Stricter security headers
+securityHeaders:
+  enabled: true
+  headers:
+    X-Frame-Options: DENY
+    X-Content-Type-Options: nosniff
+    X-XSS-Protection: "1; mode=block"
+    Referrer-Policy: strict-origin-when-cross-origin
+    Content-Security-Policy: "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"

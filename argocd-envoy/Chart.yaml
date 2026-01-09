@@ -1,0 +1,13 @@
+apiVersion: v2
+name: argocd-envoy
+description: ArgoCD HTTPRoute configuration for Envoy Gateway
+type: application
+version: 1.0.0
+appVersion: "2.14"
+keywords:
+  - argocd
+  - envoy
+  - gateway-api
+  - httproute
+maintainers:
+  - name: Platform Team

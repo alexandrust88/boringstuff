@@ -1,0 +1,76 @@
+{{- if .Values.clientTrafficPolicy.enabled }}
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: ClientTrafficPolicy
+metadata:
+  name: {{ .Values.clientTrafficPolicy.name | default "default-client-policy" }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "envoy-gateway-wrapper.labels" . | nindent 4 }}
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: {{ .Values.gateway.name | default "envoy-gateway" }}
+    namespace: {{ .Release.Namespace }}
+  {{- if .Values.clientTrafficPolicy.timeout }}
+  timeout:
+    {{- if .Values.clientTrafficPolicy.timeout.http }}
+    http:
+      {{- if .Values.clientTrafficPolicy.timeout.http.requestReceivedTimeout }}
+      requestReceivedTimeout: {{ .Values.clientTrafficPolicy.timeout.http.requestReceivedTimeout }}
+      {{- end }}
+    {{- end }}
+  {{- end }}
+  {{- if .Values.clientTrafficPolicy.tcpKeepalive }}
+  tcpKeepalive:
+    {{- if .Values.clientTrafficPolicy.tcpKeepalive.probes }}
+    probes: {{ .Values.clientTrafficPolicy.tcpKeepalive.probes }}
+    {{- end }}
+    {{- if .Values.clientTrafficPolicy.tcpKeepalive.idleTime }}
+    idleTime: {{ .Values.clientTrafficPolicy.tcpKeepalive.idleTime }}
+    {{- end }}
+    {{- if .Values.clientTrafficPolicy.tcpKeepalive.interval }}
+    interval: {{ .Values.clientTrafficPolicy.tcpKeepalive.interval }}
+    {{- end }}
+  {{- end }}
+  {{- if .Values.clientTrafficPolicy.http3 }}
+  http3:
+    {{- toYaml .Values.clientTrafficPolicy.http3 | nindent 4 }}
+  {{- end }}
+  {{- if .Values.clientTrafficPolicy.tls }}
+  tls:
+    {{- if .Values.clientTrafficPolicy.tls.minVersion }}
+    minVersion: {{ .Values.clientTrafficPolicy.tls.minVersion }}
+    {{- end }}
+    {{- if .Values.clientTrafficPolicy.tls.maxVersion }}
+    maxVersion: {{ .Values.clientTrafficPolicy.tls.maxVersion }}
+    {{- end }}
+    {{- if .Values.clientTrafficPolicy.tls.ciphers }}
+    ciphers:
+      {{- toYaml .Values.clientTrafficPolicy.tls.ciphers | nindent 6 }}
+    {{- end }}
+    {{- if .Values.clientTrafficPolicy.tls.alpnProtocols }}
+    alpnProtocols:
+      {{- toYaml .Values.clientTrafficPolicy.tls.alpnProtocols | nindent 6 }}
+    {{- end }}
+  {{- end }}
+  {{- if .Values.clientTrafficPolicy.headers }}
+  headers:
+    {{- if .Values.clientTrafficPolicy.headers.enableEnvoyHeaders }}
+    enableEnvoyHeaders: {{ .Values.clientTrafficPolicy.headers.enableEnvoyHeaders }}
+    {{- end }}
+    {{- if .Values.clientTrafficPolicy.headers.xForwardedClientCert }}
+    xForwardedClientCert:
+      {{- toYaml .Values.clientTrafficPolicy.headers.xForwardedClientCert | nindent 6 }}
+    {{- end }}
+  {{- end }}
+  {{- if .Values.clientTrafficPolicy.path }}
+  path:
+    {{- if .Values.clientTrafficPolicy.path.escapedSlashesAction }}
+    escapedSlashesAction: {{ .Values.clientTrafficPolicy.path.escapedSlashesAction }}
+    {{- end }}
+    {{- if .Values.clientTrafficPolicy.path.disableMergeSlashes }}
+    disableMergeSlashes: {{ .Values.clientTrafficPolicy.path.disableMergeSlashes }}
+    {{- end }}
+  {{- end }}
+{{- end }}

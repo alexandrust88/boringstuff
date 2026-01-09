@@ -1,0 +1,189 @@
+# Staging environment overrides for Envoy Gateway
+# Use: helm upgrade --install envoy-gateway . -f values.yaml -f values-staging.yaml
+
+global:
+  environment: staging
+
+# Staging Envoy Gateway configuration (lower resources than production)
+envoy-gateway:
+  deployment:
+    envoyGateway:
+      # Lower replica count for staging
+      replicas: 2
+
+      # Staging resource allocation
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          cpu: 500m
+          memory: 1Gi
+
+      # Pod disruption budget
+      podDisruptionBudget:
+        minAvailable: 1
+
+  config:
+    envoyGateway:
+      provider:
+        kubernetes:
+          # Staging Envoy Proxy configuration
+          envoyDeployment:
+            replicas: 2
+            pod:
+              annotations:
+                prometheus.io/scrape: "true"
+                prometheus.io/port: "19001"
+                prometheus.io/path: "/stats/prometheus"
+              labels:
+                app.kubernetes.io/part-of: envoy-gateway
+                environment: staging
+              # Basic anti-affinity for staging
+              affinity:
+                podAntiAffinity:
+                  preferredDuringSchedulingIgnoredDuringExecution:
+                    - weight: 100
+                      podAffinityTerm:
+                        labelSelector:
+                          matchLabels:
+                            app.kubernetes.io/name: envoy
+                        topologyKey: kubernetes.io/hostname
+            container:
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+
+          # Rate limiter for staging
+          rateLimitDeployment:
+            replicas: 1
+            container:
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 128Mi
+                limits:
+                  cpu: 200m
+                  memory: 256Mi
+
+          # Staging HPA settings
+          envoyHpa:
+            minReplicas: 2
+            maxReplicas: 5
+            metrics:
+              - type: Resource
+                resource:
+                  name: cpu
+                  target:
+                    type: Utilization
+                    averageUtilization: 80
+
+          # Azure LoadBalancer staging settings
+          envoyService:
+            type: LoadBalancer
+            annotations:
+              service.beta.kubernetes.io/azure-load-balancer-tcp-idle-timeout: "15"
+            externalTrafficPolicy: Local
+
+# Azure staging configuration
+azure:
+  loadBalancer:
+    internal: false
+    idleTimeoutMinutes: 15
+
+# Monitoring for staging (ServiceMonitor optional)
+monitoring:
+  enabled: true
+  serviceMonitor:
+    enabled: false
+    namespace: monitoring
+    interval: 30s
+    scrapeTimeout: 10s
+
+# Network policies disabled for easier debugging in staging
+networkPolicies:
+  enabled: false
+
+# Pod security standards
+podSecurityStandards:
+  enabled: true
+  level: baseline
+
+# Staging cluster configurations
+# Fill in actual values for each staging cluster
+clusters:
+  # Region 1 - East US Staging
+  cluster-001: { staticIP: "", dnsLabel: "stg-c001-gw", resourceGroup: "rg-staging-networking-eastus" }
+  cluster-002: { staticIP: "", dnsLabel: "stg-c002-gw", resourceGroup: "rg-staging-networking-eastus" }
+  cluster-003: { staticIP: "", dnsLabel: "stg-c003-gw", resourceGroup: "rg-staging-networking-eastus" }
+  cluster-004: { staticIP: "", dnsLabel: "stg-c004-gw", resourceGroup: "rg-staging-networking-eastus" }
+  cluster-005: { staticIP: "", dnsLabel: "stg-c005-gw", resourceGroup: "rg-staging-networking-eastus" }
+  cluster-006: { staticIP: "", dnsLabel: "stg-c006-gw", resourceGroup: "rg-staging-networking-eastus" }
+  cluster-007: { staticIP: "", dnsLabel: "stg-c007-gw", resourceGroup: "rg-staging-networking-eastus" }
+  cluster-008: { staticIP: "", dnsLabel: "stg-c008-gw", resourceGroup: "rg-staging-networking-eastus" }
+  cluster-009: { staticIP: "", dnsLabel: "stg-c009-gw", resourceGroup: "rg-staging-networking-eastus" }
+  cluster-010: { staticIP: "", dnsLabel: "stg-c010-gw", resourceGroup: "rg-staging-networking-eastus" }
+
+  # Region 2 - West US Staging
+  cluster-011: { staticIP: "", dnsLabel: "stg-c011-gw", resourceGroup: "rg-staging-networking-westus" }
+  cluster-012: { staticIP: "", dnsLabel: "stg-c012-gw", resourceGroup: "rg-staging-networking-westus" }
+  cluster-013: { staticIP: "", dnsLabel: "stg-c013-gw", resourceGroup: "rg-staging-networking-westus" }
+  cluster-014: { staticIP: "", dnsLabel: "stg-c014-gw", resourceGroup: "rg-staging-networking-westus" }
+  cluster-015: { staticIP: "", dnsLabel: "stg-c015-gw", resourceGroup: "rg-staging-networking-westus" }
+  cluster-016: { staticIP: "", dnsLabel: "stg-c016-gw", resourceGroup: "rg-staging-networking-westus" }
+  cluster-017: { staticIP: "", dnsLabel: "stg-c017-gw", resourceGroup: "rg-staging-networking-westus" }
+  cluster-018: { staticIP: "", dnsLabel: "stg-c018-gw", resourceGroup: "rg-staging-networking-westus" }
+  cluster-019: { staticIP: "", dnsLabel: "stg-c019-gw", resourceGroup: "rg-staging-networking-westus" }
+  cluster-020: { staticIP: "", dnsLabel: "stg-c020-gw", resourceGroup: "rg-staging-networking-westus" }
+
+  # Region 3 - North Europe Staging
+  cluster-021: { staticIP: "", dnsLabel: "stg-c021-gw", resourceGroup: "rg-staging-networking-northeu" }
+  cluster-022: { staticIP: "", dnsLabel: "stg-c022-gw", resourceGroup: "rg-staging-networking-northeu" }
+  cluster-023: { staticIP: "", dnsLabel: "stg-c023-gw", resourceGroup: "rg-staging-networking-northeu" }
+  cluster-024: { staticIP: "", dnsLabel: "stg-c024-gw", resourceGroup: "rg-staging-networking-northeu" }
+  cluster-025: { staticIP: "", dnsLabel: "stg-c025-gw", resourceGroup: "rg-staging-networking-northeu" }
+  cluster-026: { staticIP: "", dnsLabel: "stg-c026-gw", resourceGroup: "rg-staging-networking-northeu" }
+  cluster-027: { staticIP: "", dnsLabel: "stg-c027-gw", resourceGroup: "rg-staging-networking-northeu" }
+  cluster-028: { staticIP: "", dnsLabel: "stg-c028-gw", resourceGroup: "rg-staging-networking-northeu" }
+  cluster-029: { staticIP: "", dnsLabel: "stg-c029-gw", resourceGroup: "rg-staging-networking-northeu" }
+  cluster-030: { staticIP: "", dnsLabel: "stg-c030-gw", resourceGroup: "rg-staging-networking-northeu" }
+
+  # Region 4 - West Europe Staging
+  cluster-031: { staticIP: "", dnsLabel: "stg-c031-gw", resourceGroup: "rg-staging-networking-westeu" }
+  cluster-032: { staticIP: "", dnsLabel: "stg-c032-gw", resourceGroup: "rg-staging-networking-westeu" }
+  cluster-033: { staticIP: "", dnsLabel: "stg-c033-gw", resourceGroup: "rg-staging-networking-westeu" }
+  cluster-034: { staticIP: "", dnsLabel: "stg-c034-gw", resourceGroup: "rg-staging-networking-westeu" }
+  cluster-035: { staticIP: "", dnsLabel: "stg-c035-gw", resourceGroup: "rg-staging-networking-westeu" }
+  cluster-036: { staticIP: "", dnsLabel: "stg-c036-gw", resourceGroup: "rg-staging-networking-westeu" }
+  cluster-037: { staticIP: "", dnsLabel: "stg-c037-gw", resourceGroup: "rg-staging-networking-westeu" }
+  cluster-038: { staticIP: "", dnsLabel: "stg-c038-gw", resourceGroup: "rg-staging-networking-westeu" }
+  cluster-039: { staticIP: "", dnsLabel: "stg-c039-gw", resourceGroup: "rg-staging-networking-westeu" }
+  cluster-040: { staticIP: "", dnsLabel: "stg-c040-gw", resourceGroup: "rg-staging-networking-westeu" }
+
+  # Region 5 - Southeast Asia Staging
+  cluster-041: { staticIP: "", dnsLabel: "stg-c041-gw", resourceGroup: "rg-staging-networking-seasia" }
+  cluster-042: { staticIP: "", dnsLabel: "stg-c042-gw", resourceGroup: "rg-staging-networking-seasia" }
+  cluster-043: { staticIP: "", dnsLabel: "stg-c043-gw", resourceGroup: "rg-staging-networking-seasia" }
+  cluster-044: { staticIP: "", dnsLabel: "stg-c044-gw", resourceGroup: "rg-staging-networking-seasia" }
+  cluster-045: { staticIP: "", dnsLabel: "stg-c045-gw", resourceGroup: "rg-staging-networking-seasia" }
+  cluster-046: { staticIP: "", dnsLabel: "stg-c046-gw", resourceGroup: "rg-staging-networking-seasia" }
+  cluster-047: { staticIP: "", dnsLabel: "stg-c047-gw", resourceGroup: "rg-staging-networking-seasia" }
+  cluster-048: { staticIP: "", dnsLabel: "stg-c048-gw", resourceGroup: "rg-staging-networking-seasia" }
+  cluster-049: { staticIP: "", dnsLabel: "stg-c049-gw", resourceGroup: "rg-staging-networking-seasia" }
+  cluster-050: { staticIP: "", dnsLabel: "stg-c050-gw", resourceGroup: "rg-staging-networking-seasia" }
+
+  # Region 6 - Australia East Staging
+  cluster-051: { staticIP: "", dnsLabel: "stg-c051-gw", resourceGroup: "rg-staging-networking-auseast" }
+  cluster-052: { staticIP: "", dnsLabel: "stg-c052-gw", resourceGroup: "rg-staging-networking-auseast" }
+  cluster-053: { staticIP: "", dnsLabel: "stg-c053-gw", resourceGroup: "rg-staging-networking-auseast" }
+  cluster-054: { staticIP: "", dnsLabel: "stg-c054-gw", resourceGroup: "rg-staging-networking-auseast" }
+  cluster-055: { staticIP: "", dnsLabel: "stg-c055-gw", resourceGroup: "rg-staging-networking-auseast" }
+  cluster-056: { staticIP: "", dnsLabel: "stg-c056-gw", resourceGroup: "rg-staging-networking-auseast" }
+  cluster-057: { staticIP: "", dnsLabel: "stg-c057-gw", resourceGroup: "rg-staging-networking-auseast" }
+  cluster-058: { staticIP: "", dnsLabel: "stg-c058-gw", resourceGroup: "rg-staging-networking-auseast" }
+  cluster-059: { staticIP: "", dnsLabel: "stg-c059-gw", resourceGroup: "rg-staging-networking-auseast" }
+  cluster-060: { staticIP: "", dnsLabel: "stg-c060-gw", resourceGroup: "rg-staging-networking-auseast" }
