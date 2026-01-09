@@ -1,14 +1,63 @@
-# ArgoCD via Envoy Gateway - parallel test (doesn't affect existing Ingress)
-# Uses a different hostname so both can run simultaneously
+# EnvoyProxy config for ArgoCD Gateway (with security context)
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: argocd-proxy
+  namespace: argocd
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyDeployment:
+        replicas: 1
+        pod:
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            fsGroup: 65534
+            seccompProfile:
+              type: RuntimeDefault
+        container:
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65534
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      envoyService:
+        type: LoadBalancer
 ---
-# Gateway for ArgoCD (in argocd namespace)
+# GatewayClass for ArgoCD (references EnvoyProxy in argocd namespace)
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: eg-argocd
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+  parametersRef:
+    group: gateway.envoyproxy.io
+    kind: EnvoyProxy
+    name: argocd-proxy
+    namespace: argocd
+---
+# Gateway for ArgoCD
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
   name: argocd-gw
   namespace: argocd
 spec:
-  gatewayClassName: eg
+  gatewayClassName: eg-argocd  # Uses the ArgoCD-specific GatewayClass
   listeners:
     - name: http
       protocol: HTTP
@@ -23,7 +72,7 @@ spec:
         mode: Terminate
         certificateRefs:
           - kind: Secret
-            name: argocd-server-tls  # Existing ArgoCD TLS secret
+            name: argocd-server-tls
       allowedRoutes:
         namespaces:
           from: Same
@@ -62,7 +111,7 @@ spec:
             value: /
       backendRefs:
         - name: argocd-server
-          port: 80  # ArgoCD server HTTP port (TLS terminates at gateway)
+          port: 80
 ---
 # gRPC route for ArgoCD CLI
 apiVersion: gateway.networking.k8s.io/v1
