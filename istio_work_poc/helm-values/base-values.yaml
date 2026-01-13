@@ -1,0 +1,31 @@
+# Istio Base Helm Values
+# This chart installs Istio CRDs and cluster-scoped resources
+
+# Default revision for Istio (used for canary upgrades)
+defaultRevision: default
+
+# Global settings inherited by all Istio components
+global:
+  # ============================================
+  # PHASE 2: Private Registry Configuration
+  # Uncomment and update when moving to private registry
+  # ============================================
+  # hub: your-registry.example.com/istio
+  # tag: "1.28.0"
+  # imagePullSecrets:
+  #   - name: your-registry-secret
+
+  # Logging level for Istio components
+  logging:
+    level: "default:info"
+
+  # Proxy settings (affects sidecars)
+  proxy:
+    # Resource limits/requests for sidecars
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 2000m
+        memory: 1024Mi

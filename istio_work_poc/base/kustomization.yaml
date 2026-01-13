@@ -1,0 +1,8 @@
+# Kustomization for base resources
+# This can be used to apply namespace and any other base resources
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - namespace.yaml

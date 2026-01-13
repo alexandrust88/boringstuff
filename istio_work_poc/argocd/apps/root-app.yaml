@@ -1,0 +1,23 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: istio-root
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: istio
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  source:
+    # TODO: Replace with your private GitHub repo URL
+    repoURL: https://github.com/YOUR_ORG/istio-gitops.git
+    targetRevision: main  # or your branch name
+    path: argocd/apps
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

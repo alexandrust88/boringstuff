@@ -1,0 +1,83 @@
+# Istio Ingress Gateway Helm Values
+
+# Gateway name
+name: istio-ingressgateway
+
+# Number of gateway replicas
+replicaCount: 1
+
+# Auto-scaling configuration
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 80
+
+# Service configuration
+service:
+  # Service type (LoadBalancer for cloud, NodePort for bare metal)
+  type: LoadBalancer
+
+  # Ports exposed by the gateway
+  ports:
+    - name: status-port
+      port: 15021
+      protocol: TCP
+      targetPort: 15021
+    - name: http2
+      port: 80
+      protocol: TCP
+      targetPort: 80
+    - name: https
+      port: 443
+      protocol: TCP
+      targetPort: 443
+
+  # Annotations for cloud load balancers (uncomment as needed)
+  annotations: {}
+    # AWS NLB example:
+    # service.beta.kubernetes.io/aws-load-balancer-type: nlb
+    # service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+
+    # GCP example:
+    # cloud.google.com/load-balancer-type: External
+
+    # Azure example:
+    # service.beta.kubernetes.io/azure-load-balancer-internal: "false"
+
+# Resource limits
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 2000m
+    memory: 1024Mi
+
+# Pod disruption budget
+podDisruptionBudget:
+  minAvailable: 1
+
+# Node selector (optional)
+nodeSelector: {}
+
+# Tolerations (optional)
+tolerations: []
+
+# Affinity rules (optional)
+affinity: {}
+
+# Labels for the gateway pods
+labels:
+  app: istio-ingressgateway
+  istio: ingressgateway
+
+# ============================================
+# PHASE 2: Private Registry Configuration
+# Uncomment and update when moving to private registry
+# ============================================
+# global:
+#   hub: your-registry.example.com/istio
+#   tag: "1.28.0"
+#   imagePullSecrets:
+#     - name: your-registry-secret

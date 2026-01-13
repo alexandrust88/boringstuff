@@ -1,0 +1,51 @@
+# Phase 2: Istio Base Application with Private Registry
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: istio-base
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  labels:
+    app.kubernetes.io/part-of: istio
+    app.kubernetes.io/component: base
+    app.kubernetes.io/version: "1.28.0"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: istio
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: istio-system
+  sources:
+    # IMPORTANT: Git repo with ref MUST come first for $values to work
+    - repoURL: https://github.com/YOUR_ORG/istio-gitops.git
+      targetRevision: main
+      ref: values
+    # Private OCI registry for Helm charts
+    - repoURL: oci://your-registry.example.com/helm-charts
+      chart: base
+      targetRevision: "1.28.0"
+      helm:
+        valueFiles:
+          - $values/helm-values/base-values.yaml
+        # Override to use private image registry
+        values: |
+          global:
+            hub: your-registry.example.com/istio
+            tag: "1.28.0"
+            imagePullSecrets:
+              - name: registry-credentials
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

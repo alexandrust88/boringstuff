@@ -1,0 +1,90 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: istio
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  description: Istio Service Mesh Project
+
+  # Allow deploying from these source repos
+  sourceRepos:
+    # Official Istio Helm charts
+    - https://istio-release.storage.googleapis.com/charts
+    # Your private Git repo (update this URL)
+    - https://github.com/YOUR_ORG/istio-gitops.git
+    # For Phase 2: Private OCI registry (uncomment when ready)
+    # - oci://your-registry.example.com/helm-charts/*
+
+  # Allowed destination clusters and namespaces
+  destinations:
+    - namespace: istio-system
+      server: https://kubernetes.default.svc
+    - namespace: istio-ingress
+      server: https://kubernetes.default.svc
+    - namespace: argocd
+      server: https://kubernetes.default.svc
+
+  # Cluster-scoped resources that Istio needs to create
+  clusterResourceWhitelist:
+    - group: ''
+      kind: Namespace
+    - group: 'apiextensions.k8s.io'
+      kind: CustomResourceDefinition
+    - group: 'admissionregistration.k8s.io'
+      kind: MutatingWebhookConfiguration
+    - group: 'admissionregistration.k8s.io'
+      kind: ValidatingWebhookConfiguration
+    - group: 'rbac.authorization.k8s.io'
+      kind: ClusterRole
+    - group: 'rbac.authorization.k8s.io'
+      kind: ClusterRoleBinding
+
+  # Namespace-scoped resources (scoped to Istio-specific resources)
+  namespaceResourceWhitelist:
+    # Core resources
+    - group: ''
+      kind: Service
+    - group: ''
+      kind: ServiceAccount
+    - group: ''
+      kind: ConfigMap
+    - group: ''
+      kind: Secret
+    - group: ''
+      kind: Endpoints
+    # Workloads
+    - group: 'apps'
+      kind: Deployment
+    - group: 'apps'
+      kind: DaemonSet
+    - group: 'apps'
+      kind: ReplicaSet
+    # Scaling
+    - group: 'autoscaling'
+      kind: HorizontalPodAutoscaler
+    # Disruption
+    - group: 'policy'
+      kind: PodDisruptionBudget
+    # RBAC
+    - group: 'rbac.authorization.k8s.io'
+      kind: Role
+    - group: 'rbac.authorization.k8s.io'
+      kind: RoleBinding
+    # Istio CRDs
+    - group: 'networking.istio.io'
+      kind: '*'
+    - group: 'security.istio.io'
+      kind: '*'
+    - group: 'telemetry.istio.io'
+      kind: '*'
+    - group: 'extensions.istio.io'
+      kind: '*'
+    # Gateway API (if used)
+    - group: 'gateway.networking.k8s.io'
+      kind: '*'
+
+  # Orphaned resources monitoring
+  orphanedResources:
+    warn: true

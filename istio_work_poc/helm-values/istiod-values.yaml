@@ -1,0 +1,98 @@
+# Istiod (Control Plane) Helm Values
+
+# Revision name (useful for canary deployments)
+revision: ""
+
+# Pilot (istiod) configuration
+pilot:
+  # Number of istiod replicas (increase for HA in production)
+  # POC: 1, Production: 2-3
+  replicaCount: 1
+
+  # Auto-scaling configuration
+  autoscaleEnabled: true
+  autoscaleMin: 1
+  autoscaleMax: 5
+
+  # Resource limits
+  resources:
+    requests:
+      cpu: 500m
+      memory: 2048Mi
+    limits:
+      cpu: 1000m
+      memory: 4096Mi
+
+  # Enable status port for health checks
+  enableProtocolSniffingForOutbound: true
+  enableProtocolSniffingForInbound: true
+
+  # Tracing configuration
+  # POC: 100% (1.0), Production: 1% (0.01) or lower
+  traceSampling: 1.0
+
+# Global configuration
+global:
+  # ============================================
+  # PHASE 2: Private Registry Configuration
+  # Uncomment and update when moving to private registry
+  # ============================================
+  # hub: your-registry.example.com/istio
+  # tag: "1.28.0"
+  # imagePullSecrets:
+  #   - name: your-registry-secret
+
+  # Istio config validation
+  configValidation: true
+
+  # Default proxy settings (inherited by sidecars)
+  proxy:
+    # Log level for Envoy sidecars
+    logLevel: warning
+
+    # Enable core dumps for debugging (disable in prod)
+    enableCoreDump: false
+
+    # Cluster domain
+    clusterDomain: "cluster.local"
+
+    # Resource defaults for sidecars
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 2000m
+        memory: 1024Mi
+
+# Mesh configuration
+meshConfig:
+  # Enable access logging
+  accessLogFile: /dev/stdout
+  accessLogFormat: ""
+
+  # Enable auto mTLS (preferred method in Istio 1.28+)
+  enableAutoMtls: true
+
+  # Default config for sidecars
+  defaultConfig:
+    # Tracing configuration
+    # POC: 100% (1.0), Production: 1% (0.01) or lower
+    tracing:
+      sampling: 1.0
+      # Uncomment and configure if using Zipkin/Jaeger
+      # zipkin:
+      #   address: "zipkin.istio-system:9411"
+
+    # Hold application start until proxy is ready
+    holdApplicationUntilProxyStarts: true
+
+  # Outbound traffic policy
+  # REGISTRY_ONLY = only allow traffic to services in the mesh (more secure)
+  # ALLOW_ANY = allow traffic to any external service (easier for POC)
+  outboundTrafficPolicy:
+    mode: ALLOW_ANY
+
+  # Enable locality-based load balancing
+  localityLbSetting:
+    enabled: true
