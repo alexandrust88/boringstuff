@@ -1,0 +1,88 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: envoy-gateway
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  description: Envoy Gateway Project
+
+  # Allow deploying from these source repos
+  sourceRepos:
+    # Official Envoy Gateway Helm chart (OCI)
+    - oci://docker.io/envoyproxy/gateway-helm
+    # Your private Git repo (update this URL)
+    - https://github.com/YOUR_ORG/envoy-gateway-gitops.git
+    # For Phase 2: Private OCI registry (uncomment when ready)
+    # - oci://your-registry.example.com/helm-charts/*
+
+  # Allowed destination clusters and namespaces
+  destinations:
+    - namespace: envoy-gateway-system
+      server: https://kubernetes.default.svc
+    - namespace: argocd
+      server: https://kubernetes.default.svc
+    # Allow deploying to any namespace for Gateway resources
+    - namespace: '*'
+      server: https://kubernetes.default.svc
+
+  # Cluster-scoped resources that Envoy Gateway needs
+  clusterResourceWhitelist:
+    - group: ''
+      kind: Namespace
+    - group: 'apiextensions.k8s.io'
+      kind: CustomResourceDefinition
+    - group: 'admissionregistration.k8s.io'
+      kind: MutatingWebhookConfiguration
+    - group: 'admissionregistration.k8s.io'
+      kind: ValidatingWebhookConfiguration
+    - group: 'rbac.authorization.k8s.io'
+      kind: ClusterRole
+    - group: 'rbac.authorization.k8s.io'
+      kind: ClusterRoleBinding
+    # Gateway API CRDs
+    - group: 'gateway.networking.k8s.io'
+      kind: GatewayClass
+
+  # Namespace-scoped resources
+  namespaceResourceWhitelist:
+    # Core resources
+    - group: ''
+      kind: Service
+    - group: ''
+      kind: ServiceAccount
+    - group: ''
+      kind: ConfigMap
+    - group: ''
+      kind: Secret
+    - group: ''
+      kind: Endpoints
+    # Workloads
+    - group: 'apps'
+      kind: Deployment
+    - group: 'apps'
+      kind: DaemonSet
+    - group: 'apps'
+      kind: ReplicaSet
+    # Scaling
+    - group: 'autoscaling'
+      kind: HorizontalPodAutoscaler
+    # Disruption
+    - group: 'policy'
+      kind: PodDisruptionBudget
+    # RBAC
+    - group: 'rbac.authorization.k8s.io'
+      kind: Role
+    - group: 'rbac.authorization.k8s.io'
+      kind: RoleBinding
+    # Gateway API resources
+    - group: 'gateway.networking.k8s.io'
+      kind: '*'
+    # Envoy Gateway CRDs
+    - group: 'gateway.envoyproxy.io'
+      kind: '*'
+
+  # Orphaned resources monitoring
+  orphanedResources:
+    warn: true

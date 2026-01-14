@@ -1,0 +1,72 @@
+# Phase 2: Envoy Gateway Application with Private Registry
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: envoy-gateway
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  labels:
+    app.kubernetes.io/part-of: envoy-gateway
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/version: "1.3.0"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: envoy-gateway
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: envoy-gateway-system
+  sources:
+    # IMPORTANT: Git repo with ref MUST come first for $values to work
+    - repoURL: https://github.com/YOUR_ORG/envoy-gateway-gitops.git
+      targetRevision: main
+      ref: values
+    # Private OCI registry for Helm charts
+    - repoURL: oci://your-registry.example.com/helm-charts
+      chart: gateway-helm
+      targetRevision: "v1.3.0"
+      helm:
+        releaseName: envoy-gateway
+        valueFiles:
+          - $values/helm-values/envoy-gateway-values.yaml
+        # Override to use private image registry
+        values: |
+          deployment:
+            envoyGateway:
+              image:
+                repository: your-registry.example.com/envoyproxy/gateway
+                tag: "v1.3.0"
+              imagePullSecrets:
+                - name: registry-credentials
+          config:
+            envoyGateway:
+              provider:
+                kubernetes:
+                  envoyDeployment:
+                    container:
+                      image: your-registry.example.com/envoyproxy/envoy:distroless-v1.32.0
+  # Ignore webhook caBundle differences
+  ignoreDifferences:
+    - group: admissionregistration.k8s.io
+      kind: MutatingWebhookConfiguration
+      jqPathExpressions:
+        - .webhooks[].clientConfig.caBundle
+    - group: admissionregistration.k8s.io
+      kind: ValidatingWebhookConfiguration
+      jqPathExpressions:
+        - .webhooks[].clientConfig.caBundle
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+      - RespectIgnoreDifferences=true

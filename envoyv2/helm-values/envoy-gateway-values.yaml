@@ -1,0 +1,283 @@
+# Envoy Gateway Helm Values
+# Chart: oci://docker.io/envoyproxy/gateway-helm
+
+# ============================================
+# Deployment Configuration
+# ============================================
+deployment:
+  envoyGateway:
+    image:
+      repository: docker.io/envoyproxy/gateway
+      tag: ""  # Uses chart appVersion by default
+      pullPolicy: IfNotPresent
+
+    # ============================================
+    # PHASE 2: Private Registry Configuration
+    # Uncomment and update when moving to private registry
+    # ============================================
+    # image:
+    #   repository: your-registry.example.com/envoyproxy/gateway
+    #   tag: "v1.3.0"
+    # imagePullSecrets:
+    #   - name: registry-credentials
+
+    # Replica count (POC: 1, Production: 2+)
+    replicas: 2
+
+    # Resource configuration
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 1Gi
+
+    # ============================================
+    # Pod Security Context
+    # ============================================
+    pod:
+      annotations: {}
+      labels: {}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+
+    # ============================================
+    # Container Security Context
+    # ============================================
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 65532
+      runAsGroup: 65532
+      readOnlyRootFilesystem: true
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop:
+          - ALL
+      seccompProfile:
+        type: RuntimeDefault
+
+    # Pod Disruption Budget
+    podDisruptionBudget:
+      minAvailable: 1
+
+    # Tolerations
+    tolerations: []
+
+    # Node selector
+    nodeSelector: {}
+
+    # Affinity rules
+    affinity: {}
+
+    # Topology spread constraints for HA
+    topologySpreadConstraints: []
+    # - maxSkew: 1
+    #   topologyKey: topology.kubernetes.io/zone
+    #   whenUnsatisfiable: ScheduleAnyway
+    #   labelSelector:
+    #     matchLabels:
+    #       app.kubernetes.io/name: envoy-gateway
+
+# ============================================
+# Service Account Configuration
+# ============================================
+serviceAccount:
+  create: true
+  annotations: {}
+    # AWS IRSA example:
+    # eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/envoy-gateway-role
+    # GCP Workload Identity example:
+    # iam.gke.io/gcp-service-account: envoy-gateway@PROJECT_ID.iam.gserviceaccount.com
+
+# ============================================
+# Envoy Gateway Configuration
+# ============================================
+config:
+  envoyGateway:
+    # Gateway controller name
+    gateway:
+      controllerName: gateway.envoyproxy.io/gatewayclass-controller
+
+    # Logging configuration
+    logging:
+      level:
+        default: info
+
+    # Provider configuration
+    provider:
+      type: Kubernetes
+      kubernetes:
+        # ============================================
+        # Envoy Proxy Deployment Configuration
+        # ============================================
+        envoyDeployment:
+          replicas: 2
+          strategy:
+            type: RollingUpdate
+            rollingUpdate:
+              maxUnavailable: 1
+              maxSurge: 1
+
+          # Pod configuration
+          pod:
+            annotations: {}
+            labels: {}
+            # ============================================
+            # Envoy Proxy Pod Security Context
+            # ============================================
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 65532
+              runAsGroup: 65532
+              fsGroup: 65532
+              seccompProfile:
+                type: RuntimeDefault
+
+          # Container configuration
+          container:
+            # ============================================
+            # Envoy Proxy Container Security Context
+            # ============================================
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 65532
+              runAsGroup: 65532
+              readOnlyRootFilesystem: true
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop:
+                  - ALL
+                add:
+                  # Required for binding to privileged ports (80, 443)
+                  - NET_BIND_SERVICE
+              seccompProfile:
+                type: RuntimeDefault
+
+            # Resource limits
+            resources:
+              requests:
+                cpu: 200m
+                memory: 256Mi
+              limits:
+                cpu: 1000m
+                memory: 1Gi
+
+            # Environment variables
+            env: []
+
+            # Volume mounts
+            volumeMounts: []
+
+          # Init containers (if needed)
+          initContainers: []
+
+          # Extra volumes
+          volumes: []
+
+        # ============================================
+        # Envoy Service Configuration
+        # ============================================
+        envoyService:
+          type: LoadBalancer
+          externalTrafficPolicy: Local
+          annotations: {}
+            # AWS NLB example:
+            # service.beta.kubernetes.io/aws-load-balancer-type: nlb
+            # service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+
+            # Azure example:
+            # service.beta.kubernetes.io/azure-load-balancer-internal: "false"
+
+            # GCP example:
+            # cloud.google.com/load-balancer-type: External
+
+        # ============================================
+        # Horizontal Pod Autoscaler
+        # ============================================
+        envoyHpa:
+          minReplicas: 2
+          maxReplicas: 10
+          metrics:
+            - type: Resource
+              resource:
+                name: cpu
+                target:
+                  type: Utilization
+                  averageUtilization: 80
+
+        # ============================================
+        # Rate Limit Deployment (if using rate limiting)
+        # ============================================
+        rateLimitDeployment:
+          replicas: 1
+          pod:
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 65532
+              runAsGroup: 65532
+              fsGroup: 65532
+              seccompProfile:
+                type: RuntimeDefault
+          container:
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 65532
+              runAsGroup: 65532
+              readOnlyRootFilesystem: true
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop:
+                  - ALL
+              seccompProfile:
+                type: RuntimeDefault
+            resources:
+              requests:
+                cpu: 100m
+                memory: 128Mi
+              limits:
+                cpu: 200m
+                memory: 256Mi
+
+# ============================================
+# Kubernetes Gateway API Configuration
+# ============================================
+kubernetesGatewayAPI:
+  # Install Gateway API CRDs
+  # Set to false if already installed cluster-wide
+  installCRDs: true
+
+# ============================================
+# Certgen Configuration (for webhooks)
+# ============================================
+certgen:
+  job:
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 65532
+      runAsGroup: 65532
+      seccompProfile:
+        type: RuntimeDefault
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        cpu: 100m
+        memory: 128Mi
+
+# ============================================
+# Global Settings
+# ============================================
+global:
+  images:
+    # Override all image repositories for air-gapped environments
+    # envoyGateway:
+    #   repository: your-registry.example.com/envoyproxy/gateway
+    # ratelimit:
+    #   repository: your-registry.example.com/envoyproxy/ratelimit
