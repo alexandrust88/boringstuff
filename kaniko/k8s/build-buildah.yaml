@@ -1,0 +1,43 @@
+---
+# buildah build pod - FAILS under restricted psa
+# same problem as podman: needs capabilities that restricted blocks
+# included to demonstrate it does NOT work in restricted
+apiVersion: v1
+kind: Pod
+metadata:
+  name: build-buildah
+  namespace: build-eval
+  annotations:
+    note: "this pod will be REJECTED by restricted psa - that is the point"
+spec:
+  automountServiceAccountToken: false
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: buildah
+      image: quay.io/buildah/stable:latest
+      command: ["sh", "-c"]
+      args:
+        - |
+          echo "FROM python:3.12-slim" > /tmp/Dockerfile
+          echo "CMD [\"python\", \"-c\", \"print('hello')\"]" >> /tmp/Dockerfile
+          buildah bud --tag test:latest /tmp/
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: false
+        capabilities:
+          drop: [ALL]
+          # buildah needs these to work - which restricted psa blocks:
+          # add: [SETUID, SETGID, SYS_CHOWN]
+      resources:
+        requests:
+          cpu: 200m
+          memory: 512Mi
+        limits:
+          cpu: "1"
+          memory: 1Gi

@@ -1,0 +1,80 @@
+---
+# kaniko build pod - works under restricted psa
+# the only builder that passes restricted without exceptions
+apiVersion: v1
+kind: Pod
+metadata:
+  name: build-kaniko
+  namespace: build-eval
+spec:
+  automountServiceAccountToken: false
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  initContainers:
+    # git clone into shared volume (kaniko executor can't clone under restricted)
+    - name: fetch-source
+      image: bitnami/git:latest
+      command: ["sh", "-c"]
+      args:
+        - |
+          cd /source
+          echo 'FROM python:3.12-slim
+          WORKDIR /app
+          COPY app.py .
+          EXPOSE 8080
+          USER 1000
+          CMD ["python", "app.py"]' > Dockerfile
+          echo 'from http.server import HTTPServer, BaseHTTPRequestHandler
+          import os, socket
+          class H(BaseHTTPRequestHandler):
+              def do_GET(self):
+                  self.send_response(200)
+                  self.end_headers()
+                  self.wfile.write(f"hello from {socket.gethostname()}\n".encode())
+          if __name__ == "__main__":
+              HTTPServer(("0.0.0.0", 8080), H).serve_forever()' > app.py
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: false
+        capabilities:
+          drop: [ALL]
+      volumeMounts:
+        - name: source
+          mountPath: /source
+  containers:
+    - name: kaniko
+      image: gcr.io/kaniko-project/executor:latest
+      args:
+        - --context=/source
+        - --dockerfile=/source/Dockerfile
+        - --no-push
+        - --tarPath=/output/image.tar
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: false
+        capabilities:
+          drop: [ALL]
+      volumeMounts:
+        - name: source
+          mountPath: /source
+          readOnly: true
+        - name: output
+          mountPath: /output
+      resources:
+        requests:
+          cpu: 200m
+          memory: 512Mi
+        limits:
+          cpu: "1"
+          memory: 1Gi
+  volumes:
+    - name: source
+      emptyDir: {}
+    - name: output
+      emptyDir: {}

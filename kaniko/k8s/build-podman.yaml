@@ -1,0 +1,43 @@
+---
+# podman build pod - FAILS under restricted psa
+# needs: privileged or at minimum baseline + fuse device
+# included to demonstrate it does NOT work in restricted
+apiVersion: v1
+kind: Pod
+metadata:
+  name: build-podman
+  namespace: build-eval
+  annotations:
+    note: "this pod will be REJECTED by restricted psa - that is the point"
+spec:
+  automountServiceAccountToken: false
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: podman
+      image: quay.io/podman/stable:latest
+      command: ["sh", "-c"]
+      args:
+        - |
+          echo "FROM python:3.12-slim" > /tmp/Dockerfile
+          echo "CMD [\"python\", \"-c\", \"print('hello')\"]" >> /tmp/Dockerfile
+          podman build --tag test:latest /tmp/
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: false
+        capabilities:
+          drop: [ALL]
+          # podman needs these to work - which restricted psa blocks:
+          # add: [SETUID, SETGID, SYS_CHOWN]
+      resources:
+        requests:
+          cpu: 200m
+          memory: 512Mi
+        limits:
+          cpu: "1"
+          memory: 1Gi
