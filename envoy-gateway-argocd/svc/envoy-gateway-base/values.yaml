@@ -1,0 +1,75 @@
+# Default values for envoy-gateway-base
+# This wraps the upstream gateway-helm chart from envoyproxy
+#
+# Upstream chart structure reference (v1.3.0):
+#   deployment.envoyGateway  -> container-level (image, resources, securityContext)
+#   deployment.replicas      -> replica count
+#   deployment.pod           -> pod-level (affinity, tolerations, nodeSelector, topologySpreadConstraints)
+#   podDisruptionBudget      -> top-level
+#   config.envoyGateway      -> controller config
+#   certgen.job              -> webhook cert generation job
+#   service                  -> service annotations
+
+gateway-helm:
+  deployment:
+    replicas: 2
+    envoyGateway:
+      image:
+        repository: ""
+        tag: ""
+      imagePullPolicy: IfNotPresent
+      imagePullSecrets: []
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          cpu: 500m
+          memory: 1Gi
+      securityContext:
+        allowPrivilegeEscalation: true
+        privileged: true
+        readOnlyRootFilesystem: false
+        runAsNonRoot: false
+        runAsUser: 0
+        runAsGroup: 0
+    pod:
+      annotations: {}
+      labels: {}
+      tolerations: []
+      nodeSelector: {}
+      affinity: {}
+      topologySpreadConstraints: []
+
+  podDisruptionBudget:
+    minAvailable: 1
+
+  service:
+    annotations: {}
+
+  config:
+    envoyGateway:
+      gateway:
+        controllerName: gateway.envoyproxy.io/gatewayclass-controller
+      logging:
+        level:
+          default: info
+      provider:
+        type: Kubernetes
+
+  certgen:
+    job:
+      securityContext:
+        allowPrivilegeEscalation: true
+        privileged: true
+        readOnlyRootFilesystem: false
+        runAsNonRoot: false
+        runAsUser: 0
+        runAsGroup: 0
+      resources:
+        requests:
+          cpu: 10m
+          memory: 32Mi
+        limits:
+          cpu: 100m
+          memory: 128Mi

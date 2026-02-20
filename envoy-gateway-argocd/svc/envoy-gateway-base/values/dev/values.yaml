@@ -1,0 +1,14 @@
+# Dev environment overrides for envoy-gateway-base
+gateway-helm:
+  deployment:
+    replicas: 1
+    envoyGateway:
+      resources:
+        requests:
+          cpu: 50m
+          memory: 128Mi
+        limits:
+          cpu: 250m
+          memory: 512Mi
+  podDisruptionBudget:
+    minAvailable: 0

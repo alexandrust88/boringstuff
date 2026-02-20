@@ -1,0 +1,357 @@
+# =============================================================================
+# cilium + datadog operational runbook
+# =============================================================================
+# troubleshooting, validation, capacity planning, and scaling best practices
+#
+# references:
+#   - https://docs.cilium.io/en/stable/observability/metrics/
+#   - https://www.datadoghq.com/blog/cilium-operations-at-scale/
+#   - https://www.datadoghq.com/blog/monitor-cilium-cni-with-datadog/
+#   - https://www.datadoghq.com/blog/cilium-metrics-and-architecture/
+#   - https://github.com/DataDog/integrations-core/blob/master/cilium/README.md
+# =============================================================================
+
+
+# =============================================================================
+# 1. QUICK VALIDATION COMMANDS
+# =============================================================================
+
+verify_cilium_metrics:
+  description: "confirm cilium prometheus endpoints are serving metrics"
+  commands:
+    - desc: "agent metrics (port 9962)"
+      cmd: "kubectl exec -n kube-system ds/cilium -- curl -s localhost:9962/metrics | head -30"
+    - desc: "hubble metrics (port 9965, embedded in cilium-agent on AKS)"
+      cmd: "kubectl exec -n kube-system ds/cilium -- curl -s localhost:9965/metrics | head -30"
+    # NOTE: envoy metrics (port 9964) NOT available on AKS - no L7 proxy deployed
+    - desc: "operator metrics (port 6942)"
+      cmd: "kubectl exec -n kube-system deploy/cilium-operator -- curl -s localhost:6942/metrics | head -30"
+
+verify_datadog_scraping:
+  description: "confirm datadog agent is collecting cilium metrics"
+  commands:
+    - desc: "check cilium in agent status"
+      cmd: "kubectl exec -n datadog ds/datadog -- agent status | grep -A10 cilium"
+    - desc: "run cilium check"
+      cmd: "kubectl exec -n datadog ds/datadog -- agent check cilium"
+    - desc: "run openmetrics check (for hubble)"
+      cmd: "kubectl exec -n datadog ds/datadog -- agent check openmetrics"
+    - desc: "verify check configuration"
+      cmd: "kubectl exec -n datadog ds/datadog -- agent configcheck | grep cilium"
+
+verify_cilium_health:
+  description: "confirm cilium components are healthy"
+  commands:
+    - desc: "cilium status"
+      cmd: "kubectl exec -n kube-system ds/cilium -- cilium-dbg status"
+    - desc: "verbose status"
+      cmd: "kubectl exec -n kube-system ds/cilium -- cilium-dbg status --verbose"
+    - desc: "hubble status"
+      cmd: "kubectl exec -n kube-system ds/cilium -- hubble status"
+    - desc: "list available metrics"
+      cmd: "kubectl exec -n kube-system ds/cilium -- cilium-dbg metrics list"
+    - desc: "list all controllers and their status"
+      cmd: "kubectl exec -n kube-system ds/cilium -- cilium-dbg status --all-controllers"
+
+check_metric_cardinality:
+  description: "check how many metric lines each endpoint produces"
+  commands:
+    - desc: "agent metric line count"
+      cmd: "kubectl exec -n kube-system ds/cilium -- curl -s localhost:9962/metrics | wc -l"
+    - desc: "hubble metric line count"
+      cmd: "kubectl exec -n kube-system ds/cilium -- curl -s localhost:9965/metrics | wc -l"
+    - desc: "top metrics by cardinality (agent)"
+      cmd: >
+        kubectl exec -n kube-system ds/cilium --
+        sh -c "curl -s localhost:9962/metrics | grep -v '^#' | cut -d'{' -f1 | sort | uniq -c | sort -rn | head -20"
+    - desc: "top metrics by cardinality (hubble)"
+      cmd: >
+        kubectl exec -n kube-system ds/cilium --
+        sh -c "curl -s localhost:9965/metrics | grep -v '^#' | cut -d'{' -f1 | sort | uniq -c | sort -rn | head -20"
+
+
+# =============================================================================
+# 2. PREFLIGHT VALIDATION (before upgrades)
+# =============================================================================
+# reference: https://www.datadoghq.com/blog/cilium-operations-at-scale/
+
+upgrade_preflight:
+  description: "run before any cilium upgrade to catch compatibility issues"
+  commands:
+    - desc: "validate CiliumNetworkPolicy and CiliumClusterwideNetworkPolicy resources"
+      cmd: >
+        kubectl -n kube-system exec deploy/cilium-operator --
+        cilium-dbg preflight validate-cnp
+    - desc: "run connectivity test (pod-to-pod, pod-to-service, external)"
+      cmd: "cilium connectivity test"
+      note: "runs as Helm post-upgrade hook; failures block rollouts"
+    - desc: "check BPF map pressure before upgrade"
+      cmd: >
+        kubectl exec -n kube-system ds/cilium --
+        cilium-dbg bpf ct list global | wc -l
+    - desc: "check identity count headroom (limit: 65535)"
+      cmd: >
+        kubectl exec -n kube-system ds/cilium --
+        cilium-dbg identity list | wc -l
+    - desc: "verify cilium version"
+      cmd: "kubectl exec -n kube-system ds/cilium -- cilium-dbg version"
+
+
+# =============================================================================
+# 3. TROUBLESHOOTING GUIDES
+# =============================================================================
+
+troubleshooting:
+
+  cilium_metrics_not_working:
+    description: "cilium prometheus endpoints not serving metrics"
+    steps:
+      - desc: "check cilium-config configmap for prometheus settings"
+        cmd: "kubectl get cm cilium-config -n kube-system -o yaml | grep -E 'prometheus|metrics'"
+      - desc: "verify cilium services exist"
+        cmd: "kubectl get svc -n kube-system | grep -E 'cilium|hubble'"
+      - desc: "port-forward and test directly"
+        cmd: "kubectl port-forward -n kube-system ds/cilium 9962:9962 &"
+      - desc: "curl the endpoint"
+        cmd: "curl -s localhost:9962/metrics | grep cilium_endpoint"
+      - desc: "check if prometheus is enabled in helm values"
+        note: "ensure prometheus.enabled=true in cilium helm values"
+
+  datadog_not_scraping:
+    description: "datadog agent not collecting cilium metrics"
+    steps:
+      - desc: "check agent logs for cilium mentions"
+        cmd: "kubectl logs -n datadog ds/datadog -c agent | grep -i cilium"
+      - desc: "check agent logs for openmetrics mentions"
+        cmd: "kubectl logs -n datadog ds/datadog -c agent | grep -i openmetrics"
+      - desc: "verify check configuration is loaded"
+        cmd: "kubectl exec -n datadog ds/datadog -- agent configcheck | grep cilium"
+      - desc: "verify ad_identifiers match actual container names"
+        note: |
+          ad_identifiers must match the container name in the pod spec.
+          common names: cilium-agent, cilium-operator, cilium
+      - desc: "check if network policies block agent -> cilium traffic"
+        note: "ensure datadog agent pods can reach cilium pods on ports 9962, 9965, 6942"
+
+  hubble_not_reporting:
+    description: "hubble metrics not available"
+    steps:
+      - desc: "check hubble-metrics service"
+        cmd: "kubectl get svc -n kube-system hubble-metrics"
+      - desc: "observe recent hubble events"
+        cmd: "kubectl exec -n kube-system ds/cilium -- hubble observe --last 10"
+      - desc: "check hubble status in cilium"
+        cmd: "kubectl exec -n kube-system ds/cilium -- cilium-dbg status | grep Hubble"
+      - desc: "check hubble ring buffer"
+        note: "increase event-queue sizes and buffer limits for high-traffic clusters"
+
+  high_cardinality_issues:
+    description: "too many custom metrics from cilium"
+    causes:
+      - "hubble labelsContext includes source_ip or destination_ip"
+      - "high-cardinality agent metrics enabled (node_connectivity_*)"
+      - "port-distribution plugin on diverse workloads"
+    actions:
+      - desc: "identify highest cardinality metrics"
+        cmd: >
+          kubectl exec -n kube-system ds/cilium --
+          sh -c "curl -s localhost:9962/metrics | sort -t'{' -k1,1 | cut -d'{' -f1 | uniq -c | sort -rn | head -20"
+      - desc: "same for hubble"
+        cmd: >
+          kubectl exec -n kube-system ds/cilium --
+          sh -c "curl -s localhost:9965/metrics | sort -t'{' -k1,1 | cut -d'{' -f1 | uniq -c | sort -rn | head -20"
+    fixes:
+      - "remove source_ip, destination_ip from labelsContext in hubble metrics config"
+      - "disable high-cardinality agent metrics with -cilium_node_connectivity_*"
+      - "use exclude_metrics in datadog confd to drop unused metrics"
+      - "increase monitorAggregation from medium to maximum"
+      - "reduce port-distribution and sctp plugins if not needed"
+
+  bpf_map_pressure_high:
+    description: "BPF map approaching capacity"
+    steps:
+      - desc: "identify which map is full"
+        cmd: "kubectl exec -n kube-system ds/cilium -- cilium-dbg bpf ct list global | wc -l"
+      - desc: "check all BPF maps"
+        note: "use bpftool map show to inspect map contents"
+      - desc: "check conntrack table size"
+        cmd: "kubectl exec -n kube-system ds/cilium -- cilium-dbg bpf ct list global | wc -l"
+    fixes:
+      - "tune bpf-map-dynamic-size-ratio (e.g., 0.0025 = 0.25% of memory)"
+      - "avoid resizing maps during peak traffic"
+      - "check for connection leak patterns (stuck connections)"
+      - "enable-unreachable-routes=true to clean up stale connections faster"
+
+  endpoint_regeneration_failing:
+    description: "endpoints failing to regenerate"
+    steps:
+      - desc: "list endpoints and find failing ones"
+        cmd: "kubectl exec -n kube-system ds/cilium -- cilium-dbg endpoint list"
+      - desc: "check specific endpoint"
+        cmd: "kubectl exec -n kube-system ds/cilium -- cilium-dbg endpoint get <ID>"
+    causes:
+      - "invalid CiliumNetworkPolicy syntax"
+      - "BPF compilation errors (check cilium-agent logs)"
+      - "insufficient CPU/memory on the node"
+      - "BPF map pressure preventing map updates"
+
+  drops_policy_denied:
+    description: "packets dropped due to policy denied"
+    steps:
+      - desc: "monitor drops in real-time"
+        cmd: "kubectl exec -n kube-system ds/cilium -- cilium-dbg monitor --type drop"
+      - desc: "observe drops via hubble"
+        cmd: "kubectl exec -n kube-system ds/cilium -- hubble observe --verdict DROPPED --last 50"
+      - desc: "check which policies are applied"
+        cmd: "kubectl exec -n kube-system ds/cilium -- cilium-dbg policy get"
+    causes:
+      - "newly applied CiliumNetworkPolicy blocking expected traffic"
+      - "missing egress/ingress rules for new services"
+      - "default-deny policy without proper exceptions"
+
+
+# =============================================================================
+# 4. CAPACITY PLANNING FORMULAS
+# =============================================================================
+# datadog query formulas for capacity planning widgets
+
+capacity_planning:
+
+  identity_capacity:
+    description: "track identity allocation towards the 65535 limit"
+    current: "sum:cilium.identity.count{*}"
+    limit: 65535
+    growth_rate: "per_hour(derivative(sum:cilium.identity.count{*}))"
+    days_to_limit: "(65535 - sum:cilium.identity.count{*}) / (per_hour(derivative(sum:cilium.identity.count{*})) * 24)"
+    recommendations:
+      - "maintain compact allowlist of identity-relevant labels"
+      - "exclude high-cardinality prefixes (pod-specific, deployment-specific)"
+      - "monitor identity GC frequency during churn events"
+      - "use cilium-dbg identity list to audit current identities"
+
+  bpf_map_capacity:
+    description: "track BPF map pressure and forecast exhaustion"
+    current_pressure: "avg:cilium.bpf.map_pressure{*} by {map_name}"
+    fill_rate_per_hour: "per_hour(derivative(avg:cilium.bpf.map_pressure{*} by {map_name}))"
+    hours_to_90pct: "(0.90 - avg:cilium.bpf.map_pressure{map_name:$map}) / per_hour(derivative(avg:cilium.bpf.map_pressure{map_name:$map}))"
+    critical_maps:
+      - "cilium_ct4_global (IPv4 conntrack)"
+      - "cilium_ct_any4_global (any-protocol conntrack)"
+      - "cilium_snat_v4_external (SNAT)"
+      - "cilium_lb4_services_v2 (load balancer)"
+      - "cilium_policy_* (per-endpoint policy maps)"
+    tuning: "bpf-map-dynamic-size-ratio: 0.0025 (0.25% of node memory)"
+
+  endpoint_scaling:
+    description: "track endpoint growth and regeneration overhead"
+    growth_rate: "per_hour(derivative(sum:cilium.endpoint.count{*})) * 24"
+    regen_overhead: "sum:cilium.endpoint.regenerations.count{*}.as_rate() / sum:cilium.endpoint.count{*}"
+    avg_regen_time: "avg:cilium.endpoint.regeneration_time_stats.seconds.sum / avg:cilium.endpoint.regeneration_time_stats.seconds.count"
+    max_per_node: "~250 endpoints per node (depends on resources)"
+    note: "increasing regen time indicates cluster churn exceeding processing capacity"
+
+  ip_address_utilization:
+    description: "track IP address usage and IPAM efficiency"
+    note: "On AKS, IPAM is Azure-delegated (Azure VNET manages pod IPs). cilium.ipam.capacity may not be populated."
+    current: "sum:cilium.ip_addresses.count{*} by {family}"
+    allocation_rate: "per_hour(derivative(sum:cilium.ip_addresses.count{*}))"
+    aks_note: |
+      Azure manages IP allocation via VNET subnets. Monitor subnet utilization
+      via Azure Monitor or az network vnet subnet show --query addressPrefix.
+      Cilium IPAM tuning options do not apply on AKS.
+
+
+# =============================================================================
+# 5. SCALING BEST PRACTICES
+# =============================================================================
+# from: https://www.datadoghq.com/blog/cilium-operations-at-scale/
+
+scaling_best_practices:
+
+  routing:
+    - "prefer native routing over overlays (eliminates encapsulation costs)"
+    - "define ipv4NativeRoutingCIDR to prevent accidental east-west SNAT"
+    - "simplifies MTU management across layers"
+
+  ipam:
+    - "AKS: Azure manages IPAM via VNET delegated subnets - cilium IPAM tuning does not apply"
+    - "monitor Azure VNET subnet utilization for IP exhaustion"
+    - "for non-AKS: set pre-allocate=1 to limit IP waste on high-density nodes"
+    - "for non-AKS: use surge allocate to batch IPs during pending pod backlogs"
+    - "for AWS: enable IPv4 prefix delegation (/28 = 16 IPs per ENI slot)"
+
+  kube_proxy_replacement:
+    - "enable Maglev consistent hashing for stable backend selection"
+    - "use XDP acceleration where hardware and kernel support it"
+    - "implement Local Redirect Policies to keep DNS on-node"
+
+  conntrack:
+    - "enable-unreachable-routes=true (return ICMP unreachable for reclaimed pod IPs)"
+    - "reduces blind retransmits and martian source noise"
+    - "monitor conntrack GC per node for localized datapath stress"
+
+  mtu:
+    - "derive pod MTU from underlying network MTU minus encapsulation overhead"
+    - "standardize per environment"
+    - "MTU mismatches appear as: intermittent timeouts with larger payloads, increased TCP retransmits"
+
+  identity:
+    - "maintain compact allowlist of identity-relevant labels"
+    - "exclude high-cardinality prefixes (pod-specific, deployment-hash labels)"
+    - "monitor identity map size and GC frequency during churn"
+
+  hubble:
+    - "increase event-queue sizes and buffer limits for high-traffic clusters"
+    - "apply rate limits to flow events (prevent high-volume from starving other signals)"
+    - "monitor backpressure, queue drops, processing failures"
+
+  rollouts:
+    - "maintain custom Helm chart derived from upstream releases"
+    - "stagger deployments: canary -> staging -> production"
+    - "run cilium-dbg preflight validate-cnp before upgrades"
+    - "use cilium connectivity test as Helm post-upgrade hook"
+
+  observability:
+    - "track cilium_bpf_map_pressure for all critical maps"
+    - "monitor 'CT: Map insertion failed' drop reasons"
+    - "track pod start latency correlation with node replacements"
+    - "watch for elevated agent CPU during hubble flow capture"
+    - "monitor uneven backend utilization in kube-proxy replacement mode"
+
+
+# =============================================================================
+# 6. GKE-SPECIFIC NOTES
+# =============================================================================
+
+gke_notes:
+  metrics_port: 9990  # fixed, non-configurable on GKE
+  note: "GKE cilium exposes agent metrics on port 9990 instead of 9962"
+  datadog_config: |
+    Change the agent_endpoint in datadog confd from:
+      http://%%host%%:9962/metrics
+    to:
+      http://%%host%%:9990/metrics
+  ipam: "GKE manages IPAM natively; cilium IPAM mode is typically 'kubernetes'"
+
+
+# =============================================================================
+# 7. DATADOG INTEGRATION VERSION COMPATIBILITY
+# =============================================================================
+
+compatibility:
+  min_agent_version: "6.15.1"
+  openmetrics_agent_version: "7.34.0+"  # for cilium.openmetrics.health service check
+  cilium_versions:
+    pre_1_8:
+      prometheus: "global.prometheus.enabled=true"
+    v1_8_to_v1_9:
+      prometheus: "global.prometheus.enabled=true"
+      operator: "global.operatorPrometheus.enabled=true"
+    v1_9_plus:
+      prometheus: "prometheus.enabled=true"
+      operator: "operator.prometheus.enabled=true"
+  service_checks:
+    - name: "cilium.prometheus.health"
+      since: "agent 6.16.0"
+    - name: "cilium.openmetrics.health"
+      since: "agent 7.34.0"

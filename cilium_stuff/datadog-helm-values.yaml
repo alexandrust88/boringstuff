@@ -1,0 +1,247 @@
+# =============================================================================
+# datadog agent helm values - AKS cilium 1.17 integration
+# =============================================================================
+# deploy:
+#   helm repo add datadog https://helm.datadoghq.com
+#   helm install datadog datadog/datadog -f datadog-helm-values.yaml -n datadog --create-namespace
+#
+# AKS cilium 1.17 specifics:
+#   - hubble is embedded in cilium-agent (no relay pod)
+#   - hubble metrics on port 9965 are served by cilium-agent pods
+#   - ad_identifiers for hubble = "cilium-agent" (same pod)
+#   - no clustermesh, no envoy proxy
+#
+# check instances:
+#   1. cilium check      -> agent metrics   (port 9962, cilium-agent pods)
+#   2. cilium check      -> operator metrics (port 6942, cilium-operator pods)
+#   3. openmetrics check -> hubble metrics   (port 9965, cilium-agent pods)
+#   4. coredns check     -> coredns metrics  (port 9153, coredns pods)
+#   5. kube_state_metrics -> ksm metrics     (port 8080, kube-state-metrics pods)
+#
+# references:
+#   - https://docs.datadoghq.com/integrations/cilium/
+#   - https://github.com/DataDog/integrations-core/blob/master/cilium/README.md
+#   - https://www.datadoghq.com/blog/monitor-cilium-cni-with-datadog/
+# =============================================================================
+
+datadog:
+  # --- api key (stored in k8s secret) ---
+  # create: kubectl create secret generic datadog-api-key --from-literal api-key=<KEY> -n datadog
+  apiKeyExistingSecret: datadog-api-key
+
+  # CHANGE: datadog site (eu = datadoghq.eu, us = datadoghq.com)
+  site: datadoghq.eu
+
+  # CHANGE: your cluster name
+  clusterName: my-cluster
+
+  # global tags applied to all data
+  tags:
+    - "env:dev"
+    - "cni:cilium"
+    - "team:platform"
+    - "cloud:azure"
+    - "managed:aks"
+
+  # --- cloud network monitoring (cnm, formerly npm) ---
+  # uses eBPF kprobes independent of cilium for network topology maps
+  networkMonitoring:
+    enabled: true
+
+  # --- system probe for deep kernel visibility ---
+  systemProbe:
+    enabled: true
+    conntrackEnabled: true            # connection tracking for network maps
+    enableTCPQueueLength: true        # detect saturated TCP send/receive queues
+    enableOOMKill: true               # track OOM kill events per container
+
+  # --- process agent ---
+  processAgent:
+    enabled: true
+    processCollection: true           # live process monitoring
+
+  # --- orchestrator explorer ---
+  # provides live k8s resource views in datadog
+  orchestratorExplorer:
+    enabled: true
+
+  # --- log collection ---
+  logs:
+    enabled: true
+    containerCollectAll: true
+
+  # --- prometheus scraping (backup, confd is preferred) ---
+  prometheusScrape:
+    enabled: true
+    serviceEndpoints: true
+
+  # --- service monitoring (USM) ---
+  # auto-discovers services and generates service maps via eBPF
+  serviceMonitoring:
+    enabled: true
+
+  # --- check configurations ---
+  confd:
+    # check 1: cilium-agent metrics (native cilium check)
+    # scrapes port 9962 on cilium-agent pods
+    cilium_agent.yaml: |-
+      ad_identifiers:
+        - cilium-agent
+      init_config:
+      instances:
+        - agent_endpoint: http://%%host%%:9962/metrics
+          use_openmetrics: true
+          collect_histogram_buckets: true
+          histogram_buckets_as_distributions: true
+          min_collection_interval: 15
+          tags:
+            - "component:cilium-agent"
+
+    # check 2: cilium-operator metrics (native cilium check)
+    # scrapes port 6942 on cilium-operator pods
+    cilium_operator.yaml: |-
+      ad_identifiers:
+        - cilium-operator
+      init_config:
+      instances:
+        - operator_endpoint: http://%%host%%:6942/metrics
+          use_openmetrics: true
+          collect_histogram_buckets: true
+          histogram_buckets_as_distributions: true
+          min_collection_interval: 15
+          tags:
+            - "component:cilium-operator"
+
+    # check 3: hubble metrics (openmetrics check)
+    # on AKS, hubble is embedded in cilium-agent (no relay)
+    # so ad_identifier is cilium-agent, port 9965 on the same pod
+    hubble.yaml: |-
+      ad_identifiers:
+        - cilium-agent
+      init_config:
+      instances:
+        - openmetrics_endpoint: http://%%host%%:9965/metrics
+          namespace: cilium.hubble
+          metrics:
+            - "hubble_.*"
+          use_openmetrics: true
+          collect_histogram_buckets: true
+          histogram_buckets_as_distributions: true
+          min_collection_interval: 15
+          tags:
+            - "component:hubble"
+
+    # check 4: coredns metrics (native coredns check)
+    # AKS uses coredns for cluster DNS; cilium DNS metrics complement this
+    coredns.yaml: |-
+      ad_identifiers:
+        - coredns
+      init_config:
+      instances:
+        - openmetrics_endpoint: http://%%host%%:9153/metrics
+          tags:
+            - "component:coredns"
+
+    # check 5: kube-state-metrics (if deployed)
+    # provides pod/node/deployment state for correlating with cilium metrics
+    # NOTE: only needed if kube-state-metrics is not already auto-discovered
+    # kube_state_metrics.yaml: |-
+    #   ad_identifiers:
+    #     - kube-state-metrics
+    #   init_config:
+    #   instances:
+    #     - kube_state_url: http://%%host%%:8080/metrics
+    #       tags:
+    #         - "component:kube-state-metrics"
+
+# --- cluster agent ---
+clusterAgent:
+  enabled: true
+  config:
+    externalMetrics:
+      enabled: true                   # for HPA based on cilium/datadog metrics
+
+# --- agent daemonset ---
+agents:
+  tolerations:
+    - operator: Exists                # run on all nodes including cilium nodes
+
+
+# =============================================================================
+# COPY-PASTE SNIPPET for your existing cac.yaml confd section
+# =============================================================================
+# add this under your existing confd: block (after http_check.yaml):
+#
+#     # --- cilium agent metrics (native cilium check, port 9962) ---
+#     cilium.yaml: |-
+#       ad_identifiers:
+#         - cilium-agent
+#       init_config:
+#       instances:
+#         - agent_endpoint: http://%%host%%:9962/metrics
+#           use_openmetrics: true
+#           collect_histogram_buckets: true
+#           histogram_buckets_as_distributions: true
+#           min_collection_interval: 15
+#           tags:
+#             - "component:cilium-agent"
+#
+#     # --- cilium operator metrics (native cilium check, port 6942) ---
+#     cilium_operator.yaml: |-
+#       ad_identifiers:
+#         - cilium-operator
+#       init_config:
+#       instances:
+#         - operator_endpoint: http://%%host%%:6942/metrics
+#           use_openmetrics: true
+#           collect_histogram_buckets: true
+#           histogram_buckets_as_distributions: true
+#           min_collection_interval: 15
+#           tags:
+#             - "component:cilium-operator"
+#
+#     # --- hubble metrics (openmetrics, port 9965, embedded in cilium-agent) ---
+#     hubble.yaml: |-
+#       ad_identifiers:
+#         - cilium-agent
+#       init_config:
+#       instances:
+#         - openmetrics_endpoint: http://%%host%%:9965/metrics
+#           namespace: cilium.hubble
+#           metrics:
+#             - "hubble_.*"
+#           use_openmetrics: true
+#           collect_histogram_buckets: true
+#           histogram_buckets_as_distributions: true
+#           min_collection_interval: 15
+#           tags:
+#             - "component:hubble"
+#
+#     # --- coredns metrics (native check, port 9153) ---
+#     coredns.yaml: |-
+#       ad_identifiers:
+#         - coredns
+#       init_config:
+#       instances:
+#         - openmetrics_endpoint: http://%%host%%:9153/metrics
+#           tags:
+#             - "component:coredns"
+#
+# =============================================================================
+
+
+# =============================================================================
+# verification commands
+# =============================================================================
+# kubectl exec -n datadog ds/datadog -- agent status | grep -A10 cilium
+# kubectl exec -n datadog ds/datadog -- agent check cilium
+# kubectl exec -n datadog ds/datadog -- agent check openmetrics
+# kubectl exec -n datadog ds/datadog -- agent check coredns
+# kubectl exec -n datadog ds/datadog -- agent configcheck | grep -E 'cilium|coredns|hubble'
+#
+# verify cilium agent exposes metrics:
+# kubectl exec -n kube-system ds/cilium -- curl -s localhost:9962/metrics | head -20
+# kubectl exec -n kube-system ds/cilium -- curl -s localhost:9965/metrics | head -20
+#
+# verify coredns exposes metrics:
+# kubectl exec -n kube-system deploy/coredns -- wget -qO- http://localhost:9153/metrics | head -20

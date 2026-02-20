@@ -1,0 +1,1336 @@
+# =============================================================================
+# cilium + datadog: comprehensive integration guide
+# =============================================================================
+#
+# covers: all cilium metric types, all hubble plugins, advanced datadog
+# agent configuration, openmetrics v2, cloud network monitoring, security
+# monitors, and a full custom dashboard json.
+#
+# ports reference:
+#   9962 - cilium-agent prometheus metrics
+#   6942 - cilium-operator prometheus metrics
+#   9965 - hubble metrics (per-node, on cilium-agent pods)
+#   9964 - cilium-envoy metrics (if envoy proxy enabled)
+#
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# 1. cilium helm values - maximum observability
+# -----------------------------------------------------------------------------
+# install: helm install cilium cilium/cilium -f cilium-values.yaml -n kube-system
+#
+# this enables ALL metric sources: agent, operator, hubble (all 11 plugins),
+# envoy proxy, openmetrics exemplars, and workload-level labels.
+# -----------------------------------------------------------------------------
+
+cilium_values: &cilium_values
+  # --- agent prometheus metrics (port 9962) ---
+  prometheus:
+    enabled: true
+    port: 9962
+    serviceMonitor:
+      enabled: false          # set true if using prometheus-operator
+      labels: {}
+      annotations: {}
+    # enable/disable specific agent metrics with +/- prefix
+    # defaults are good for most cases, uncomment to customize:
+    # metrics:
+    #   - "+cilium_bpf_syscall_duration_seconds"   # disabled by default, useful for debugging
+    #   - "-cilium_node_connectivity_latency_seconds"  # high cardinality on 200+ node clusters
+    #   - "+cilium_fqdn_active_names"               # disabled by default
+    #   - "+cilium_fqdn_active_ips"                  # disabled by default
+    #   - "+cilium_k8s_event_lag_seconds"            # disabled by default
+
+    # allowlist specific controller groups for controllers_group_runs_total metric
+    # reduces cardinality - only track controllers you care about
+    # controllerGroupMetrics:
+    #   - write-cni-file
+    #   - sync-host-ips
+    #   - sync-to-k8s
+    #   - endpoint-gc
+
+  # --- operator prometheus metrics (port 6942) ---
+  operator:
+    prometheus:
+      enabled: true
+      port: 6942              # default changed from 9963 in recent versions
+      serviceMonitor:
+        enabled: false
+
+  # --- hubble: L3-L7 flow observability ---
+  hubble:
+    enabled: true
+    relay:
+      enabled: true
+    ui:
+      enabled: false          # enable for hubble web ui
+
+    metrics:
+      port: 9965
+      enableOpenMetrics: true  # required for exemplars (trace id linking)
+
+      serviceMonitor:
+        enabled: false
+
+      # --- all 11 hubble metric plugins with full context options ---
+      #
+      # syntax: <plugin>:<option1>;<option2>;labelsContext=<labels>
+      #
+      # context options (source/destination):
+      #   identity, namespace, pod, pod-name, dns, ip,
+      #   reserved-identity, workload, workload-name, app
+      #
+      # labelsContext values (added as individual labels):
+      #   source_ip, source_namespace, source_pod, source_workload,
+      #   source_workload_kind, source_app,
+      #   destination_ip, destination_namespace, destination_pod,
+      #   destination_workload, destination_workload_kind, destination_app,
+      #   traffic_direction
+      #
+      enabled:
+        # 1. dns - dns query/response tracking
+        #    metrics: hubble_dns_queries_total, hubble_dns_responses_total,
+        #             hubble_dns_response_types_total
+        #    options: query (adds query label), ignoreAAAA (skip AAAA records)
+        - "dns:query;ignoreAAAA;labelsContext=source_namespace,destination_namespace"
+
+        # 2. drop - packet drop tracking (most important for security)
+        #    metrics: hubble_drop_total
+        #    labels: reason, protocol
+        - "drop:sourceContext=namespace|reserved-identity;destinationContext=namespace|reserved-identity;labelsContext=source_namespace,destination_namespace,traffic_direction"
+
+        # 3. tcp - tcp flag tracking
+        #    metrics: hubble_tcp_flags_total
+        #    labels: flag, family
+        - "tcp:sourceContext=namespace|reserved-identity;destinationContext=namespace|reserved-identity"
+
+        # 4. flow - aggregate flow processing stats
+        #    metrics: hubble_flows_processed_total
+        #    labels: type, subtype, verdict
+        - "flow:sourceContext=namespace|reserved-identity;destinationContext=namespace|reserved-identity;labelsContext=traffic_direction"
+
+        # 5. httpV2 - http request/response tracking (replaces deprecated http plugin)
+        #    metrics: hubble_http_requests_total, hubble_http_request_duration_seconds
+        #    labels: method, protocol, status, reporter
+        #    options: exemplars=true (links metrics to trace ids)
+        - "httpV2:exemplars=true;labelsContext=source_namespace,source_workload,source_workload_kind,destination_namespace,destination_workload,destination_workload_kind,traffic_direction"
+
+        # 6. icmp - icmp message tracking
+        #    metrics: hubble_icmp_total
+        #    labels: family, type
+        - "icmp:sourceContext=namespace|reserved-identity;destinationContext=namespace|reserved-identity"
+
+        # 7. kafka - kafka protocol tracking (if using kafka)
+        #    metrics: hubble_kafka_requests_total, hubble_kafka_request_duration_seconds
+        #    labels: topic, api_key, error_code, reporter
+        - "kafka:labelsContext=source_namespace,destination_namespace,traffic_direction"
+
+        # 8. policy - network policy verdict tracking
+        #    metrics: hubble_policy_verdicts_total
+        #    labels: direction, match, action
+        - "policy:sourceContext=namespace|reserved-identity;destinationContext=namespace|reserved-identity;labelsContext=traffic_direction"
+
+        # 9. port-distribution - destination port distribution
+        #    metrics: hubble_port_distribution_total
+        #    labels: protocol, port
+        - "port-distribution:sourceContext=namespace;destinationContext=namespace"
+
+        # 10. flows-to-world - external traffic tracking
+        #     metrics: hubble_flows_to_world_total
+        #     labels: protocol, verdict
+        #     options: any-drop (all drop verdicts), port (adds port label),
+        #              syn-only (only tcp syn)
+        - "flows-to-world:any-drop;port;syn-only;labelsContext=source_namespace,destination_namespace"
+
+        # 11. sctp - sctp chunk type tracking (if using sctp)
+        #     metrics: hubble_sctp_chunk_types_total
+        #     labels: chunk_type, family
+        - "sctp:sourceContext=namespace;destinationContext=namespace"
+
+      # --- dynamic per-node metric configuration (optional) ---
+      # allows overriding metrics config per node via configmap
+      # dynamic:
+      #   enabled: true
+      #   config:
+      #     configMapName: "hubble-metrics-config"
+      #     createConfigMap: false
+
+  # --- envoy proxy metrics (port 9964, optional) ---
+  # only needed if using L7 network policies or cilium envoy config
+  envoy:
+    enabled: false             # set true if using L7 policies
+    prometheus:
+      enabled: true
+      port: 9964
+      serviceMonitor:
+        enabled: false
+
+  # --- bpf event configuration ---
+  # controls the event stream powering hubble
+  bpf:
+    events:
+      drop:
+        enabled: true          # drop events -> hubble_drop_total
+      policyVerdict:
+        enabled: true          # policy verdict events -> hubble_policy_verdicts_total
+      trace:
+        enabled: true          # trace events for flow visibility
+    monitorAggregation: medium # none|low|medium|maximum (reduces event volume)
+    monitorInterval: "5s"      # aggregation notification interval
+    monitorFlags: all          # tcp flags that trigger notifications
+    # ctAccounting: false      # per-connection packet/byte counters (high overhead)
+
+  # --- clustermesh metrics (if using multi-cluster) ---
+  # clustermesh:
+  #   useAPIServer: true
+  #   apiserver:
+  #     metrics:
+  #       enabled: true
+  #       port: 9962
+  #       kvstoremesh:
+  #         enabled: true
+  #         port: 9964
+  #       etcd:
+  #         enabled: true
+  #         port: 9966
+  #       serviceMonitor:
+  #         enabled: true
+
+
+# -----------------------------------------------------------------------------
+# 2. datadog agent helm values - full cilium integration
+# -----------------------------------------------------------------------------
+# install:
+#   helm repo add datadog https://helm.datadoghq.com
+#   helm install datadog datadog/datadog -f datadog-values.yaml -n datadog --create-namespace
+#
+# three separate check instances:
+#   1. cilium check -> agent metrics (port 9962)
+#   2. cilium check -> operator metrics (port 6942)
+#   3. openmetrics check -> hubble metrics (port 9965)
+#
+# hubble is NOT part of the native cilium check - requires openmetrics.
+# -----------------------------------------------------------------------------
+
+datadog_values: &datadog_values
+  datadog:
+    apiKeyExistingSecret: datadog-api-key
+    site: datadoghq.eu         # eu datacenter
+
+    clusterName: my-cluster    # CHANGE: your cluster name
+    tags:
+      - "env:dev"
+      - "cni:cilium"
+      - "team:platform"
+
+    # --- cloud network monitoring (cnm, formerly npm) ---
+    # uses eBPF kprobes independent of cilium for topology maps
+    networkMonitoring:
+      enabled: true
+
+    # --- system probe for deep kernel visibility ---
+    systemProbe:
+      enabled: true
+      conntrackEnabled: true    # connection tracking for network maps
+
+    # --- log collection ---
+    logs:
+      enabled: true
+      containerCollectAll: true
+
+    # --- prometheus scraping (backup, confd is preferred) ---
+    prometheusScrape:
+      enabled: true
+      serviceEndpoints: true
+
+    # --- check configurations ---
+    confd:
+      # check 1: cilium-agent metrics (native cilium check)
+      cilium_agent.yaml: |-
+        ad_identifiers:
+          - cilium-agent
+        init_config:
+        instances:
+          - agent_endpoint: http://%%host%%:9962/metrics
+            use_openmetrics: true
+            collect_histogram_buckets: true
+            histogram_buckets_as_distributions: true
+            # extra_metrics:                    # add metrics not in default set
+            #   - cilium_bpf_syscall_duration_seconds
+            #   - cilium_fqdn_active_names
+            #   - cilium_fqdn_active_ips
+            # exclude_metrics:                  # drop high-cardinality metrics
+            #   - cilium_node_connectivity_latency_seconds
+            min_collection_interval: 15
+            tags:
+              - "component:cilium-agent"
+
+      # check 2: cilium-operator metrics (native cilium check)
+      cilium_operator.yaml: |-
+        ad_identifiers:
+          - cilium-operator
+        init_config:
+        instances:
+          - operator_endpoint: http://%%host%%:6942/metrics
+            use_openmetrics: true
+            collect_histogram_buckets: true
+            histogram_buckets_as_distributions: true
+            min_collection_interval: 15
+            tags:
+              - "component:cilium-operator"
+
+      # check 3: hubble metrics (generic openmetrics check)
+      # hubble is NOT part of the native cilium check
+      hubble.yaml: |-
+        ad_identifiers:
+          - cilium-agent
+        init_config:
+        instances:
+          - openmetrics_endpoint: http://%%host%%:9965/metrics
+            namespace: cilium.hubble
+            metrics:
+              - "hubble_.*"
+            use_openmetrics: true
+            collect_histogram_buckets: true
+            histogram_buckets_as_distributions: true
+            min_collection_interval: 15
+            tags:
+              - "component:hubble"
+
+      # check 4: cilium-envoy metrics (optional, if envoy enabled)
+      # cilium_envoy.yaml: |-
+      #   ad_identifiers:
+      #     - cilium-agent
+      #   init_config:
+      #   instances:
+      #     - openmetrics_endpoint: http://%%host%%:9964/metrics
+      #       namespace: cilium.envoy
+      #       metrics:
+      #         - "envoy_.*"
+      #       use_openmetrics: true
+      #       min_collection_interval: 15
+      #       tags:
+      #         - "component:cilium-envoy"
+
+  clusterAgent:
+    enabled: true
+    config:
+      externalMetrics:
+        enabled: true           # for hpa based on cilium metrics
+
+  agents:
+    tolerations:
+      - operator: Exists        # run on all nodes including cilium nodes
+
+
+# -----------------------------------------------------------------------------
+# 3. kubernetes autodiscovery annotations (alternative to confd)
+# -----------------------------------------------------------------------------
+# add these to cilium daemonset/deployment pod templates if you prefer
+# annotations over confd. choose one approach, not both.
+# -----------------------------------------------------------------------------
+
+cilium_agent_annotations: &cilium_agent_annotations
+  # on cilium-agent daemonset pods:
+  annotations:
+    ad.datadoghq.com/cilium-agent.check_names: '["cilium","openmetrics"]'
+    ad.datadoghq.com/cilium-agent.init_configs: '[{},{}]'
+    ad.datadoghq.com/cilium-agent.instances: |
+      [
+        {
+          "agent_endpoint": "http://%%host%%:9962/metrics",
+          "use_openmetrics": true,
+          "collect_histogram_buckets": true,
+          "histogram_buckets_as_distributions": true
+        },
+        {
+          "openmetrics_endpoint": "http://%%host%%:9965/metrics",
+          "namespace": "cilium.hubble",
+          "metrics": ["hubble_.*"],
+          "use_openmetrics": true,
+          "collect_histogram_buckets": true,
+          "histogram_buckets_as_distributions": true
+        }
+      ]
+    ad.datadoghq.com/cilium-agent.logs: |
+      [{"source": "cilium-agent", "service": "cilium-agent"}]
+
+cilium_operator_annotations: &cilium_operator_annotations
+  # on cilium-operator deployment pods:
+  annotations:
+    ad.datadoghq.com/cilium-operator.check_names: '["cilium"]'
+    ad.datadoghq.com/cilium-operator.init_configs: '[{}]'
+    ad.datadoghq.com/cilium-operator.instances: |
+      [
+        {
+          "operator_endpoint": "http://%%host%%:6942/metrics",
+          "use_openmetrics": true,
+          "collect_histogram_buckets": true,
+          "histogram_buckets_as_distributions": true
+        }
+      ]
+    ad.datadoghq.com/cilium-operator.logs: |
+      [{"source": "cilium-operator", "service": "cilium-operator"}]
+
+
+# -----------------------------------------------------------------------------
+# 4. complete metrics reference
+# -----------------------------------------------------------------------------
+# all metrics organized by source and category.
+# datadog metric names shown (with openmetrics v2 naming).
+# -----------------------------------------------------------------------------
+
+metrics_reference:
+
+  # =========================================================================
+  # CILIUM AGENT (port 9962) - collected by native cilium check
+  # =========================================================================
+
+  agent_endpoint_metrics:
+    # --- endpoints ---
+    - cilium.endpoint.count                                    # managed endpoints (gauge)
+    - cilium.endpoint.state                                    # endpoints by state (gauge, tag: endpoint_state)
+    - cilium.endpoint.regenerations.count                      # completed regenerations (counter, tag: outcome)
+    - cilium.endpoint.regeneration_time_stats.seconds.*        # regeneration timing (histogram, tag: scope)
+    - cilium.endpoint.max_ifindex                              # max interface index
+
+    # --- drops and forwards (core network) ---
+    - cilium.drop_count.count                                  # dropped packets (counter, tags: reason, direction)
+    - cilium.drop_bytes.count                                  # dropped bytes (counter, tags: reason, direction)
+    - cilium.forward_count.count                               # forwarded packets (counter, tag: direction)
+    - cilium.forward_bytes.count                               # forwarded bytes (counter, tag: direction)
+
+    # --- policy ---
+    - cilium.policy.count                                      # loaded policies (gauge)
+    - cilium.policy.max_revision                               # highest policy revision
+    - cilium.policy.change.count                               # policy changes (counter, tag: outcome)
+    - cilium.policy.endpoint_enforcement_status                # endpoints by enforcement (gauge, tag: policy_enforcement_status)
+    - cilium.policy.implementation_delay.*                     # policy deployment latency (histogram, tag: source)
+    - cilium.policy.import_errors.count                        # import failures (counter) -- ALERT ON > 0
+    - cilium.policy.regeneration.count                         # policy regenerations
+    - cilium.policy.regeneration_time_stats.seconds.*          # regen timing
+
+    # --- L7 policy / proxy ---
+    - cilium.policy.l7.count                                   # L7 requests (counter, tags: rule, proxy_type)
+    - cilium.policy.l7_denied.count                            # L7 denied (counter)
+    - cilium.policy.l7_forwarded.count                         # L7 forwarded (counter)
+    - cilium.policy.l7_parse_errors.count                      # L7 parse errors (counter) -- ALERT ON > 0
+    - cilium.policy.l7_received.count                          # L7 received (counter)
+    - cilium.proxy.redirects                                   # installed proxy redirects (gauge, tag: protocol)
+    - cilium.proxy.upstream_reply.seconds.*                    # server reply time (histogram)
+    - cilium.proxy.datapath.update_timeout.count               # datapath update timeouts
+
+    # --- ebpf / bpf ---
+    - cilium.bpf.map_pressure                                  # map utilization ratio (gauge, tag: map_name) -- CRITICAL
+    - cilium.bpf.map.capacity                                  # max map size by group (gauge, tag: group)
+    - cilium.bpf.map_ops.count                                 # map operations (counter, tags: map_name, operation, outcome)
+    - cilium.bpf.maps.virtual_memory.max.bytes                 # total ebpf map memory
+    - cilium.bpf.progs.virtual_memory.max.bytes                # total ebpf program memory
+    # - cilium.bpf.syscall_duration.seconds.*                  # disabled by default, enable with +metric
+
+    # --- conntrack / datapath ---
+    - cilium.datapath.conntrack_gc.runs.count                  # gc process runs (counter, tag: status)
+    - cilium.datapath.conntrack_gc.entries                      # alive/deleted entries (gauge, tag: family)
+    - cilium.datapath.conntrack_gc.duration.seconds.*           # gc duration (histogram)
+    - cilium.datapath.conntrack_dump.resets.count               # dump resets
+
+    # --- identity / ipcache ---
+    - cilium.identity.count                                    # allocated identities (gauge, tag: type)
+    - cilium.identity.label_sources                            # identities by label source
+    - cilium.ip_addresses.count                                # allocated ips (gauge, tag: family)
+    - cilium.ipcache.errors.count                              # ipcache errors (counter, tags: type, error)
+    - cilium.ipcache.events.count                              # ipcache events (counter, tag: type)
+
+    # --- ipam ---
+    - cilium.ipam.capacity                                     # total pool ips (gauge, tag: family)
+    - cilium.ipam.events.count                                 # ipam events (counter, tags: action, family)
+
+    # --- kubernetes ---
+    - cilium.kubernetes.events.count                           # k8s events processed (counter, tags: scope, action, outcome)
+    - cilium.kubernetes.events_received.count                  # k8s events received (counter)
+    - cilium.k8s_client.api_calls.count                        # k8s api calls (counter, tags: host, method, return_code)
+    - cilium.k8s_client.api_latency_time.seconds.*             # api call latency (histogram)
+    - cilium.k8s_client.rate_limiter_duration.seconds.*        # rate limiter latency
+    - cilium.k8s.workqueue.depth                               # workqueue depth (gauge, tag: name)
+    - cilium.k8s.workqueue.adds.total                          # items added
+    - cilium.k8s.workqueue.retries.total                       # retries
+
+    # --- kvstore (etcd) ---
+    - cilium.kvstore.operations_duration.seconds.*             # operation duration (histogram, tag: action)
+    - cilium.kvstore.events_queue.seconds.*                    # queue wait time
+    - cilium.kvstore.quorum_errors.count                       # quorum errors -- ALERT ON > 0
+    - cilium.kvstore.initial_sync_completed                    # sync status
+    - cilium.kvstore.sync_queue_size                           # queued elements
+
+    # --- node connectivity ---
+    - cilium.unreachable.nodes                                 # unreachable nodes (gauge) -- ALERT ON > 0
+    - cilium.unreachable.health_endpoints                      # unreachable health endpoints
+    # - cilium.node.connectivity.status                        # high cardinality on 200+ nodes
+    # - cilium.node.connectivity.latency.seconds               # high cardinality on 200+ nodes
+
+    # --- fqdn / dns ---
+    - cilium.fqdn.gc_deletions.count                           # cleaned fqdn entries
+    - cilium.fqdn.selectors                                    # registered tofqdn selectors
+    # - cilium.fqdn.active_names                               # disabled by default
+    # - cilium.fqdn.active_ips                                 # disabled by default
+
+    # --- controllers ---
+    - cilium.controllers.failing.count                         # failing controllers -- ALERT ON > 0
+    - cilium.controllers.runs.count                            # controller executions (counter, tag: status)
+    - cilium.controllers.runs_duration.seconds.*               # controller duration
+
+    # --- services ---
+    - cilium.services.events.count                             # service events (counter, tag: action)
+
+    # --- ipsec / encryption ---
+    # - cilium.ipsec.xfrm_error                                # xfrm errors (if using ipsec)
+    # - cilium.ipsec.keys                                      # keys in use
+    # - cilium.ipsec.xfrm_states                               # xfrm states by direction
+    # - cilium.ipsec.xfrm_policies                             # xfrm policies by direction
+
+    # --- process ---
+    - cilium.process.cpu.seconds.count                         # agent cpu usage
+    - cilium.process.resident_memory.bytes                     # agent memory
+    - cilium.process.open_fds                                  # open file descriptors
+    - cilium.process.max_fds                                   # max file descriptors
+
+    # --- bgp (if bgp control plane enabled) ---
+    # - cilium.bgp.session_state                               # session state (tags: vrouter, neighbor)
+    # - cilium.bgp.advertised_routes                           # advertised routes
+    # - cilium.bgp.received_routes                             # received routes
+
+    # --- clustermesh (if multi-cluster enabled) ---
+    # - cilium.clustermesh.remote_clusters                     # total meshed clusters
+    # - cilium.clustermesh.remote_cluster_failures             # failures per cluster
+    # - cilium.clustermesh.remote_cluster_readiness_status     # cluster readiness
+
+    # --- api rate limiting ---
+    - cilium.api_limiter.processed_requests.count              # requests processed
+    - cilium.api_limiter.processing_duration.seconds           # processing duration
+    - cilium.api_limiter.requests_in_flight                    # in-flight requests
+    - cilium.api_limiter.wait_duration.seconds                 # wait duration
+
+    # --- misc ---
+    - cilium.event_timestamp                                   # last event timestamp (gauge, tag: source)
+    - cilium.subprocess.start.count                            # subprocess starts
+    - cilium.version                                           # cilium version info
+
+  # =========================================================================
+  # CILIUM OPERATOR (port 6942) - collected by native cilium check
+  # =========================================================================
+
+  operator_endpoint_metrics:
+    # --- process ---
+    - cilium.operator.process.cpu.seconds.count                # operator cpu
+    - cilium.operator.process.resident_memory.bytes            # operator memory
+    - cilium.operator.process.open_fds                         # open fds
+    - cilium.operator.process.max_fds                          # max fds
+
+    # --- ipam (cloud provider: aws/azure) ---
+    - cilium.operator.ipam.ips                                 # allocated ips (tag: type)
+    - cilium.operator.ipam.nodes                               # nodes (tag: category)
+    - cilium.operator.ipam.available_interfaces                # available interfaces
+    - cilium.operator.ipam.allocation.duration.seconds.*       # allocation latency
+    - cilium.operator.ipam.release.duration.seconds.*          # release latency
+    - cilium.operator.ipam.api.duration.seconds.*              # api latency
+    - cilium.operator.ipam.resync.count                        # resync operations
+
+    # --- lb-ipam ---
+    - cilium.operator.lbipam.ips.available.total               # available lb ips by pool
+    - cilium.operator.lbipam.ips.used.total                    # used lb ips by pool
+    - cilium.operator.lbipam.services.matching.total           # matching services
+    - cilium.operator.lbipam.services.unsatisfied.total        # unsatisfied services
+    - cilium.operator.lbipam.conflicting.pools.total           # conflicting pools
+
+    # --- ciliumendpointslices ---
+    - cilium.operator.ces.sync.total                           # sync completions
+    - cilium.operator.ces.sync_errors.count                    # sync errors
+    - cilium.operator.ces.queueing_delay.seconds.*             # queueing latency
+    - cilium.operator.num_ceps_per_ces.*                       # ceps per ces
+
+    # --- identity gc ---
+    - cilium.operator.identity_gc.entries                      # gc identity counts
+    - cilium.operator.identity_gc.runs                         # gc runs
+
+  # =========================================================================
+  # HUBBLE (port 9965) - collected by openmetrics check
+  # =========================================================================
+  # metric names as they appear in datadog with namespace "cilium.hubble"
+
+  hubble_metrics:
+    # --- flow processing ---
+    - cilium.hubble.flows_processed_total                      # total flows (tags: type, subtype, verdict)
+    - cilium.hubble.flows_to_world_total                       # external flows (tags: protocol, verdict)
+
+    # --- drops ---
+    - cilium.hubble.drop_total                                 # dropped flows (tags: reason, protocol)
+
+    # --- dns ---
+    - cilium.hubble.dns_queries_total                          # dns queries (tags: rcode, qtypes, ips_returned)
+    - cilium.hubble.dns_responses_total                        # dns responses
+    - cilium.hubble.dns_response_types_total                   # dns response type distribution
+
+    # --- http ---
+    - cilium.hubble.http_requests_total                        # http requests (tags: method, protocol, status, reporter)
+    - cilium.hubble.http_request_duration_seconds              # http latency (histogram)
+
+    # --- tcp ---
+    - cilium.hubble.tcp_flags_total                            # tcp flags (tags: flag, family)
+
+    # --- icmp ---
+    - cilium.hubble.icmp_total                                 # icmp messages (tags: family, type)
+
+    # --- kafka ---
+    - cilium.hubble.kafka_requests_total                       # kafka requests (tags: topic, api_key, error_code)
+    - cilium.hubble.kafka_request_duration_seconds             # kafka latency (histogram)
+
+    # --- policy ---
+    - cilium.hubble.policy_verdicts_total                      # policy verdicts (tags: direction, action, match)
+
+    # --- port distribution ---
+    - cilium.hubble.port_distribution_total                    # packets by port (tags: protocol, port)
+
+    # --- sctp ---
+    - cilium.hubble.sctp_chunk_types_total                     # sctp chunks (tags: chunk_type, family)
+
+    # --- system (always active) ---
+    - cilium.hubble.lost_events_total                          # lost events (tag: source) -- ALERT ON HIGH VALUES
+
+
+# -----------------------------------------------------------------------------
+# 5. datadog monitors - comprehensive alerting
+# -----------------------------------------------------------------------------
+
+datadog_monitors:
+
+  # --- critical: data plane health ---
+  - name: "cilium: bpf map pressure critical"
+    type: query alert
+    query: "avg(last_5m):max:cilium.bpf.map_pressure{*} by {map_name,host} > 0.9"
+    message: |
+      bpf map {{map_name.name}} on {{host.name}} at {{value}} pressure.
+      values above 0.9 predict datapath failures.
+      action: check conntrack table size, increase map size, or investigate traffic patterns.
+    thresholds:
+      critical: 0.9
+      warning: 0.75
+
+  - name: "cilium: high drop rate"
+    type: query alert
+    query: "sum(last_5m):sum:cilium.drop_count.count{*} by {reason,direction}.as_rate() > 100"
+    message: |
+      high packet drops: {{value}}/sec.
+      reason: {{reason.name}}, direction: {{direction.name}}.
+    thresholds:
+      critical: 100
+      warning: 50
+
+  - name: "cilium: unreachable nodes"
+    type: query alert
+    query: "max(last_5m):max:cilium.unreachable.nodes{*} by {host} > 0"
+    message: |
+      {{host.name}} reports {{value}} unreachable nodes.
+      check node connectivity, cilium agent status.
+    thresholds:
+      critical: 0
+
+  # --- critical: control plane health ---
+  - name: "cilium: failing controllers"
+    type: query alert
+    query: "max(last_5m):max:cilium.controllers.failing.count{*} by {host} > 0"
+    message: |
+      {{value}} failing controllers on {{host.name}}.
+      run: kubectl exec -n kube-system ds/cilium -- cilium-dbg status
+    thresholds:
+      critical: 0
+
+  - name: "cilium: kvstore quorum errors"
+    type: query alert
+    query: "sum(last_5m):sum:cilium.kvstore.quorum_errors.count{*}.as_count() > 0"
+    message: "kvstore quorum errors detected. check etcd cluster health."
+    thresholds:
+      critical: 0
+
+  - name: "cilium: policy import errors"
+    type: query alert
+    query: "sum(last_10m):sum:cilium.policy.import_errors.count{*}.as_count() > 0"
+    message: |
+      policy import failures. check ciliumnetworkpolicy syntax.
+      kubectl get cnp -A | grep -v True
+    thresholds:
+      critical: 0
+
+  # --- warning: endpoint health ---
+  - name: "cilium: endpoint regeneration failures"
+    type: query alert
+    query: "sum(last_10m):sum:cilium.endpoint.regenerations.count{outcome:fail}.as_count() > 5"
+    message: "endpoint regeneration failures: {{value}}."
+    thresholds:
+      critical: 5
+      warning: 2
+
+  # --- security: policy enforcement ---
+  - name: "cilium: hubble policy denials spike"
+    type: query alert
+    query: "sum(last_5m):sum:cilium.hubble.policy_verdicts_total{action:deny}.as_count() > 100"
+    message: |
+      {{value}} policy denials in last 5 minutes.
+      check if this is expected (new policy rollout) or unexpected (attack/misconfiguration).
+    thresholds:
+      critical: 100
+      warning: 50
+
+  - name: "cilium: L7 denied requests"
+    type: query alert
+    query: "sum(last_5m):sum:cilium.policy.l7_denied.count{*}.as_count() > 10"
+    message: "L7 policy denials: {{value}}. check envoy proxy logs."
+    thresholds:
+      critical: 10
+      warning: 5
+
+  - name: "cilium: L7 parse errors"
+    type: query alert
+    query: "sum(last_10m):sum:cilium.policy.l7_parse_errors.count{*}.as_count() > 0"
+    message: "L7 parse errors detected. likely misconfigured L7 policy."
+    thresholds:
+      critical: 0
+
+  # --- observability: hubble health ---
+  - name: "cilium: hubble lost events"
+    type: query alert
+    query: "sum(last_5m):sum:cilium.hubble.lost_events_total{*} by {source}.as_count() > 1000"
+    message: |
+      hubble losing events from {{source.name}}: {{value}}.
+      consider increasing ring buffer size or reducing monitor aggregation.
+    thresholds:
+      critical: 1000
+      warning: 500
+
+  # --- dns ---
+  - name: "cilium: high dns nxdomain rate"
+    type: query alert
+    query: "sum(last_5m):sum:cilium.hubble.dns_responses_total{rcode:NXDOMAIN}.as_count() / sum:cilium.hubble.dns_responses_total{*}.as_count() > 0.3"
+    message: "30%+ dns queries returning nxdomain. possible dns misconfiguration."
+    thresholds:
+      critical: 0.3
+      warning: 0.15
+
+
+# -----------------------------------------------------------------------------
+# 6. advanced datadog dashboard json
+# -----------------------------------------------------------------------------
+# import via datadog ui: dashboards -> new dashboard -> import dashboard json
+# or via api: POST /api/v1/dashboard
+# -----------------------------------------------------------------------------
+
+datadog_dashboard:
+  title: "cilium network - advanced monitoring"
+  description: "comprehensive cilium cni monitoring with hubble L7 visibility, ebpf health, policy enforcement, and security posture"
+  layout_type: ordered
+
+  template_variables:
+    - name: cluster
+      prefix: kube_cluster_name
+      available_values: []
+      default: "*"
+    - name: namespace
+      prefix: kube_namespace
+      available_values: []
+      default: "*"
+    - name: host
+      prefix: host
+      available_values: []
+      default: "*"
+
+  widgets:
+
+    # =====================================================================
+    # section 1: overview
+    # =====================================================================
+    - definition:
+        type: group
+        title: "overview"
+        layout_type: ordered
+        widgets:
+          - definition:
+              type: query_value
+              title: "ready endpoints"
+              requests:
+                - q: "sum:cilium.endpoint.count{kube_cluster_name:$cluster}"
+                  aggregator: last
+              precision: 0
+              autoscale: true
+
+          - definition:
+              type: query_value
+              title: "active policies"
+              requests:
+                - q: "max:cilium.policy.count{kube_cluster_name:$cluster}"
+                  aggregator: last
+              precision: 0
+
+          - definition:
+              type: query_value
+              title: "unreachable nodes"
+              requests:
+                - q: "max:cilium.unreachable.nodes{kube_cluster_name:$cluster}"
+                  aggregator: last
+              precision: 0
+              custom_links: []
+              conditional_formats:
+                - comparator: ">"
+                  value: 0
+                  palette: white_on_red
+                - comparator: "<="
+                  value: 0
+                  palette: white_on_green
+
+          - definition:
+              type: query_value
+              title: "failing controllers"
+              requests:
+                - q: "max:cilium.controllers.failing.count{kube_cluster_name:$cluster}"
+                  aggregator: last
+              precision: 0
+              conditional_formats:
+                - comparator: ">"
+                  value: 0
+                  palette: white_on_red
+                - comparator: "<="
+                  value: 0
+                  palette: white_on_green
+
+          - definition:
+              type: query_value
+              title: "identities"
+              requests:
+                - q: "sum:cilium.identity.count{kube_cluster_name:$cluster}"
+                  aggregator: last
+              precision: 0
+
+          - definition:
+              type: query_value
+              title: "policy denials (5m)"
+              requests:
+                - q: "sum:cilium.hubble.policy_verdicts_total{action:deny,kube_cluster_name:$cluster}.as_count()"
+                  aggregator: sum
+              precision: 0
+              conditional_formats:
+                - comparator: ">"
+                  value: 0
+                  palette: white_on_yellow
+
+    # =====================================================================
+    # section 2: network traffic
+    # =====================================================================
+    - definition:
+        type: group
+        title: "network traffic"
+        layout_type: ordered
+        widgets:
+          - definition:
+              type: timeseries
+              title: "forwarded bytes (ingress vs egress)"
+              requests:
+                - q: "sum:cilium.forward_bytes.count{direction:ingress,kube_cluster_name:$cluster}.as_count()"
+                  display_type: area
+                  style:
+                    palette: cool
+                    line_type: solid
+                - q: "sum:cilium.forward_bytes.count{direction:egress,kube_cluster_name:$cluster}.as_count()"
+                  display_type: area
+                  style:
+                    palette: warm
+                    line_type: solid
+
+          - definition:
+              type: timeseries
+              title: "forwarded packets (ingress vs egress)"
+              requests:
+                - q: "sum:cilium.forward_count.count{direction:ingress,kube_cluster_name:$cluster}.as_count()"
+                  display_type: line
+                - q: "sum:cilium.forward_count.count{direction:egress,kube_cluster_name:$cluster}.as_count()"
+                  display_type: line
+
+          - definition:
+              type: timeseries
+              title: "drop rate by reason (ingress)"
+              requests:
+                - q: "sum:cilium.drop_count.count{direction:ingress,kube_cluster_name:$cluster} by {reason}.as_count()"
+                  display_type: bars
+                  style:
+                    palette: warm
+
+          - definition:
+              type: timeseries
+              title: "drop rate by reason (egress)"
+              requests:
+                - q: "sum:cilium.drop_count.count{direction:egress,kube_cluster_name:$cluster} by {reason}.as_count()"
+                  display_type: bars
+                  style:
+                    palette: warm
+
+          - definition:
+              type: toplist
+              title: "top drop reasons"
+              requests:
+                - q: "top(sum:cilium.drop_count.count{kube_cluster_name:$cluster} by {reason}.as_count(), 10, 'sum', 'desc')"
+
+    # =====================================================================
+    # section 3: hubble flow visibility
+    # =====================================================================
+    - definition:
+        type: group
+        title: "hubble flow visibility"
+        layout_type: ordered
+        widgets:
+          - definition:
+              type: timeseries
+              title: "flow verdicts (forwarded vs dropped vs error)"
+              requests:
+                - q: "sum:cilium.hubble.flows_processed_total{kube_cluster_name:$cluster} by {verdict}.as_count()"
+                  display_type: area
+                  style:
+                    palette: dog_classic
+
+          - definition:
+              type: timeseries
+              title: "flows to world (external traffic)"
+              requests:
+                - q: "sum:cilium.hubble.flows_to_world_total{kube_cluster_name:$cluster} by {verdict}.as_count()"
+                  display_type: area
+
+          - definition:
+              type: timeseries
+              title: "policy verdicts by action"
+              requests:
+                - q: "sum:cilium.hubble.policy_verdicts_total{kube_cluster_name:$cluster,action:allow}.as_count()"
+                  display_type: area
+                  style:
+                    palette: green
+                - q: "sum:cilium.hubble.policy_verdicts_total{kube_cluster_name:$cluster,action:deny}.as_count()"
+                  display_type: area
+                  style:
+                    palette: red
+
+          - definition:
+              type: timeseries
+              title: "hubble lost events by source"
+              requests:
+                - q: "sum:cilium.hubble.lost_events_total{kube_cluster_name:$cluster} by {source}.as_count()"
+                  display_type: bars
+                  style:
+                    palette: warm
+
+    # =====================================================================
+    # section 4: dns
+    # =====================================================================
+    - definition:
+        type: group
+        title: "dns"
+        layout_type: ordered
+        widgets:
+          - definition:
+              type: timeseries
+              title: "dns query rate"
+              requests:
+                - q: "sum:cilium.hubble.dns_queries_total{kube_cluster_name:$cluster}.as_count()"
+                  display_type: line
+
+          - definition:
+              type: timeseries
+              title: "dns responses by rcode"
+              requests:
+                - q: "sum:cilium.hubble.dns_responses_total{kube_cluster_name:$cluster} by {rcode}.as_count()"
+                  display_type: bars
+                  style:
+                    palette: dog_classic
+
+          - definition:
+              type: query_value
+              title: "nxdomain rate (%)"
+              requests:
+                - q: "sum:cilium.hubble.dns_responses_total{rcode:NXDOMAIN,kube_cluster_name:$cluster}.as_count() / sum:cilium.hubble.dns_responses_total{kube_cluster_name:$cluster}.as_count() * 100"
+                  aggregator: avg
+              precision: 1
+              conditional_formats:
+                - comparator: ">"
+                  value: 30
+                  palette: white_on_red
+                - comparator: ">"
+                  value: 15
+                  palette: white_on_yellow
+                - comparator: "<="
+                  value: 15
+                  palette: white_on_green
+
+    # =====================================================================
+    # section 5: http (requires httpV2 hubble plugin)
+    # =====================================================================
+    - definition:
+        type: group
+        title: "http (hubble L7)"
+        layout_type: ordered
+        widgets:
+          - definition:
+              type: timeseries
+              title: "http request rate by status code"
+              requests:
+                - q: "sum:cilium.hubble.http_requests_total{kube_cluster_name:$cluster} by {status}.as_count()"
+                  display_type: bars
+                  style:
+                    palette: dog_classic
+
+          - definition:
+              type: timeseries
+              title: "http request rate by method"
+              requests:
+                - q: "sum:cilium.hubble.http_requests_total{kube_cluster_name:$cluster} by {method}.as_count()"
+                  display_type: bars
+
+          - definition:
+              type: timeseries
+              title: "http latency p50/p95/p99"
+              requests:
+                - q: "p50:cilium.hubble.http_request_duration_seconds{kube_cluster_name:$cluster}"
+                  display_type: line
+                - q: "p95:cilium.hubble.http_request_duration_seconds{kube_cluster_name:$cluster}"
+                  display_type: line
+                - q: "p99:cilium.hubble.http_request_duration_seconds{kube_cluster_name:$cluster}"
+                  display_type: line
+
+    # =====================================================================
+    # section 6: tcp
+    # =====================================================================
+    - definition:
+        type: group
+        title: "tcp"
+        layout_type: ordered
+        widgets:
+          - definition:
+              type: timeseries
+              title: "tcp flags distribution"
+              requests:
+                - q: "sum:cilium.hubble.tcp_flags_total{kube_cluster_name:$cluster} by {flag}.as_count()"
+                  display_type: bars
+                  style:
+                    palette: dog_classic
+
+          - definition:
+              type: timeseries
+              title: "port distribution (top 10)"
+              requests:
+                - q: "top(sum:cilium.hubble.port_distribution_total{kube_cluster_name:$cluster} by {port}.as_count(), 10, 'sum', 'desc')"
+                  display_type: bars
+
+    # =====================================================================
+    # section 7: ebpf health
+    # =====================================================================
+    - definition:
+        type: group
+        title: "ebpf health"
+        layout_type: ordered
+        widgets:
+          - definition:
+              type: heatmap
+              title: "bpf map pressure by map name (critical)"
+              requests:
+                - q: "avg:cilium.bpf.map_pressure{kube_cluster_name:$cluster} by {map_name}"
+                  style:
+                    palette: red_to_green
+
+          - definition:
+              type: timeseries
+              title: "bpf map operations by outcome"
+              requests:
+                - q: "sum:cilium.bpf.map_ops.count{kube_cluster_name:$cluster} by {outcome}.as_count()"
+                  display_type: bars
+
+          - definition:
+              type: timeseries
+              title: "ebpf memory usage"
+              requests:
+                - q: "avg:cilium.bpf.maps.virtual_memory.max.bytes{kube_cluster_name:$cluster} by {host}"
+                  display_type: area
+                - q: "avg:cilium.bpf.progs.virtual_memory.max.bytes{kube_cluster_name:$cluster} by {host}"
+                  display_type: area
+
+          - definition:
+              type: timeseries
+              title: "conntrack gc duration"
+              requests:
+                - q: "avg:cilium.datapath.conntrack_gc.duration.seconds.sum{kube_cluster_name:$cluster} / avg:cilium.datapath.conntrack_gc.duration.seconds.count{kube_cluster_name:$cluster}"
+                  display_type: line
+
+    # =====================================================================
+    # section 8: policy enforcement
+    # =====================================================================
+    - definition:
+        type: group
+        title: "policy enforcement"
+        layout_type: ordered
+        widgets:
+          - definition:
+              type: timeseries
+              title: "endpoint enforcement status"
+              requests:
+                - q: "sum:cilium.policy.endpoint_enforcement_status{kube_cluster_name:$cluster} by {policy_enforcement_status}"
+                  display_type: bars
+                  style:
+                    palette: dog_classic
+
+          - definition:
+              type: timeseries
+              title: "policy changes"
+              requests:
+                - q: "sum:cilium.policy.change.count{kube_cluster_name:$cluster} by {outcome}.as_count()"
+                  display_type: bars
+
+          - definition:
+              type: timeseries
+              title: "policy implementation delay (p99)"
+              requests:
+                - q: "p99:cilium.policy.implementation_delay{kube_cluster_name:$cluster}"
+                  display_type: line
+
+          - definition:
+              type: timeseries
+              title: "L7 policy: forwarded vs denied"
+              requests:
+                - q: "sum:cilium.policy.l7_forwarded.count{kube_cluster_name:$cluster}.as_count()"
+                  display_type: area
+                  style:
+                    palette: green
+                - q: "sum:cilium.policy.l7_denied.count{kube_cluster_name:$cluster}.as_count()"
+                  display_type: area
+                  style:
+                    palette: red
+
+          - definition:
+              type: timeseries
+              title: "policy import errors"
+              requests:
+                - q: "sum:cilium.policy.import_errors.count{kube_cluster_name:$cluster}.as_count()"
+                  display_type: bars
+                  style:
+                    palette: warm
+
+    # =====================================================================
+    # section 9: endpoints
+    # =====================================================================
+    - definition:
+        type: group
+        title: "endpoints"
+        layout_type: ordered
+        widgets:
+          - definition:
+              type: timeseries
+              title: "endpoints by state"
+              requests:
+                - q: "sum:cilium.endpoint.state{kube_cluster_name:$cluster} by {endpoint_state}"
+                  display_type: area
+                  style:
+                    palette: dog_classic
+
+          - definition:
+              type: timeseries
+              title: "endpoint regeneration rate by outcome"
+              requests:
+                - q: "sum:cilium.endpoint.regenerations.count{kube_cluster_name:$cluster} by {outcome}.as_count()"
+                  display_type: bars
+
+          - definition:
+              type: timeseries
+              title: "avg endpoint regeneration time"
+              requests:
+                - q: "avg:cilium.endpoint.regeneration_time_stats.seconds.sum{kube_cluster_name:$cluster} / avg:cilium.endpoint.regeneration_time_stats.seconds.count{kube_cluster_name:$cluster}"
+                  display_type: line
+
+    # =====================================================================
+    # section 10: kvstore / etcd
+    # =====================================================================
+    - definition:
+        type: group
+        title: "kvstore / etcd"
+        layout_type: ordered
+        widgets:
+          - definition:
+              type: timeseries
+              title: "kvstore operation latency by action"
+              requests:
+                - q: "avg:cilium.kvstore.operations_duration.seconds.sum{kube_cluster_name:$cluster} by {action} / avg:cilium.kvstore.operations_duration.seconds.count{kube_cluster_name:$cluster} by {action}"
+                  display_type: line
+
+          - definition:
+              type: timeseries
+              title: "kvstore quorum errors"
+              requests:
+                - q: "sum:cilium.kvstore.quorum_errors.count{kube_cluster_name:$cluster}.as_count()"
+                  display_type: bars
+                  style:
+                    palette: warm
+
+          - definition:
+              type: query_value
+              title: "sync queue size"
+              requests:
+                - q: "max:cilium.kvstore.sync_queue_size{kube_cluster_name:$cluster}"
+                  aggregator: last
+
+    # =====================================================================
+    # section 11: kubernetes integration
+    # =====================================================================
+    - definition:
+        type: group
+        title: "kubernetes integration"
+        layout_type: ordered
+        widgets:
+          - definition:
+              type: timeseries
+              title: "k8s api calls by method"
+              requests:
+                - q: "sum:cilium.k8s_client.api_calls.count{kube_cluster_name:$cluster} by {method}.as_count()"
+                  display_type: bars
+
+          - definition:
+              type: timeseries
+              title: "k8s api latency (p95)"
+              requests:
+                - q: "p95:cilium.k8s_client.api_latency_time.seconds{kube_cluster_name:$cluster}"
+                  display_type: line
+
+          - definition:
+              type: timeseries
+              title: "workqueue depth"
+              requests:
+                - q: "avg:cilium.k8s.workqueue.depth{kube_cluster_name:$cluster} by {name}"
+                  display_type: line
+
+    # =====================================================================
+    # section 12: agent + operator resources
+    # =====================================================================
+    - definition:
+        type: group
+        title: "agent + operator resources"
+        layout_type: ordered
+        widgets:
+          - definition:
+              type: timeseries
+              title: "agent cpu by host"
+              requests:
+                - q: "avg:cilium.process.cpu.seconds.count{kube_cluster_name:$cluster} by {host}.as_rate()"
+                  display_type: line
+
+          - definition:
+              type: timeseries
+              title: "agent memory by host"
+              requests:
+                - q: "avg:cilium.process.resident_memory.bytes{kube_cluster_name:$cluster} by {host}"
+                  display_type: line
+
+          - definition:
+              type: timeseries
+              title: "operator cpu"
+              requests:
+                - q: "avg:cilium.operator.process.cpu.seconds.count{*}.as_rate()"
+                  display_type: line
+
+          - definition:
+              type: timeseries
+              title: "operator memory"
+              requests:
+                - q: "avg:cilium.operator.process.resident_memory.bytes{*}"
+                  display_type: line
+
+          - definition:
+              type: timeseries
+              title: "agent open file descriptors"
+              requests:
+                - q: "avg:cilium.process.open_fds{kube_cluster_name:$cluster} by {host}"
+                  display_type: line
+                - q: "avg:cilium.process.max_fds{kube_cluster_name:$cluster} by {host}"
+                  display_type: line
+                  style:
+                    line_type: dashed
+
+
+# -----------------------------------------------------------------------------
+# 7. quick test commands
+# -----------------------------------------------------------------------------
+
+test_commands:
+  verify_cilium_metrics:
+    - "kubectl exec -n kube-system ds/cilium -- curl -s localhost:9962/metrics | head -30"
+    - "kubectl exec -n kube-system ds/cilium -- curl -s localhost:9965/metrics | head -30"
+    - "kubectl exec -n kube-system ds/cilium -- curl -s localhost:9964/metrics | head -30"  # envoy (if enabled)
+
+  verify_datadog_sees_cilium:
+    - "kubectl exec -n datadog ds/datadog -- agent status | grep -A10 cilium"
+    - "kubectl exec -n datadog ds/datadog -- agent check cilium"
+    - "kubectl exec -n datadog ds/datadog -- agent check openmetrics"
+
+  verify_cilium_health:
+    - "kubectl exec -n kube-system ds/cilium -- cilium status"
+    - "kubectl exec -n kube-system ds/cilium -- cilium-dbg status --verbose"
+    - "kubectl exec -n kube-system ds/cilium -- hubble status"
+    - "kubectl exec -n kube-system ds/cilium -- cilium-dbg metrics list"
+
+  check_metric_cardinality:
+    - "kubectl exec -n kube-system ds/cilium -- curl -s localhost:9962/metrics | wc -l"
+    - "kubectl exec -n kube-system ds/cilium -- curl -s localhost:9965/metrics | wc -l"
+
+
+# -----------------------------------------------------------------------------
+# 8. troubleshooting
+# -----------------------------------------------------------------------------
+
+troubleshooting:
+
+  cilium_metrics_not_working:
+    - "kubectl get cm cilium-config -n kube-system -o yaml | grep -E 'prometheus|metrics'"
+    - "kubectl get svc -n kube-system | grep -E 'cilium|hubble'"
+    - "kubectl port-forward -n kube-system ds/cilium 9962:9962 &"
+    - "curl -s localhost:9962/metrics | grep cilium_endpoint"
+
+  datadog_not_scraping:
+    - "kubectl logs -n datadog ds/datadog -c agent | grep -i cilium"
+    - "kubectl logs -n datadog ds/datadog -c agent | grep -i openmetrics"
+    - "kubectl exec -n datadog ds/datadog -- agent configcheck | grep cilium"
+
+  hubble_not_reporting:
+    - "kubectl get svc -n kube-system hubble-metrics"
+    - "kubectl exec -n kube-system ds/cilium -- hubble observe --last 10"
+    - "kubectl exec -n kube-system ds/cilium -- cilium-dbg status | grep Hubble"
+
+  high_cardinality_issues:
+    description: |
+      if datadog reports high custom metric count from cilium:
+      1. reduce hubble labelsContext (remove source_ip, destination_ip)
+      2. disable high-cardinality agent metrics (-cilium_node_connectivity_*)
+      3. use exclude_metrics in datadog confd
+      4. increase monitorAggregation from medium to maximum
+    actions:
+      - "kubectl exec -n kube-system ds/cilium -- curl -s localhost:9962/metrics | sort -t'{' -k1,1 | cut -d'{' -f1 | uniq -c | sort -rn | head -20"
+      - "kubectl exec -n kube-system ds/cilium -- curl -s localhost:9965/metrics | sort -t'{' -k1,1 | cut -d'{' -f1 | uniq -c | sort -rn | head -20"
+
+
+# -----------------------------------------------------------------------------
+# 9. references
+# -----------------------------------------------------------------------------
+
+references:
+  cilium:
+    - https://docs.cilium.io/en/stable/observability/metrics/
+    - https://github.com/cilium/cilium/tree/main/pkg/hubble/metrics
+  datadog:
+    - https://docs.datadoghq.com/integrations/cilium/
+    - https://github.com/DataDog/integrations-core/tree/master/cilium
+    - https://github.com/DataDog/integrations-core/blob/master/cilium/metadata.csv
+  blogs:
+    - https://www.datadoghq.com/blog/monitor-cilium-with-datadog/
+    - https://www.datadoghq.com/blog/cilium-metrics-and-architecture/
+    - https://www.datadoghq.com/blog/monitor-cilium-cni-with-datadog/
+    - https://www.datadoghq.com/blog/monitor-cilium-and-kubernetes-performance-with-hubble/
+    - https://www.datadoghq.com/blog/cilium-operations-at-scale/
+  cloud_network_monitoring:
+    - https://docs.datadoghq.com/network_monitoring/cloud_network_monitoring/setup/

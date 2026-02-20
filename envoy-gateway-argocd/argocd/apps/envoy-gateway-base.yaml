@@ -1,0 +1,62 @@
+{{- $appname := "envoy-gateway-base" }}
+{{- if and (has $appname .Values.commonApps) (not (has $appname .Values.excludeApps)) }}
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{ $appname }}
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+    notifications.argoproj.io/subscribe.on-sync-succeeded.teams: k8s-updates
+    notifications.argoproj.io/subscribe.on-sync-status-unknown.teams: k8s-updates
+    notifications.argoproj.io/subscribe.on-sync-failed.teams: k8s-updates
+    notifications.argoproj.io/subscribe.on-health-degraded.teams: k8s-updates
+    notifications.argoproj.io/subscribe.on-sync-running.teams: k8s-updates
+  labels:
+    app.kubernetes.io/part-of: envoy-gateway
+    app.kubernetes.io/component: controller
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    path: svc/envoy-gateway-base
+    repoURL: {{ .Values.cluster.repoURL }}
+    {{- if (index .Values.overrides $appname) }}
+    targetRevision: {{ get .Values.overrides $appname }}
+    {{- else }}
+    targetRevision: {{ .Values.cluster.targetRevision }}
+    {{- end }}
+    helm:
+      releaseName: envoy-gateway-base
+      parameters: []
+      valueFiles:
+        - values.yaml
+        - {{ include "appofapps.valuePath" . }}
+      ignoreMissingValueFiles: true
+  destination:
+    server: 'https://kubernetes.default.svc'
+    namespace: envoy-gateway-system
+  syncPolicy:
+    automated:
+      selfHeal: true
+      prune: true
+    syncOptions:
+      - ServerSideApply=true
+      - CreateNamespace=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 15s
+        factor: 2
+        maxDuration: 3m0s
+  ignoreDifferences:
+    - group: admissionregistration.k8s.io
+      kind: MutatingWebhookConfiguration
+      jqPathExpressions:
+        - .webhooks[].clientConfig.caBundle
+    - group: admissionregistration.k8s.io
+      kind: ValidatingWebhookConfiguration
+      jqPathExpressions:
+        - .webhooks[].clientConfig.caBundle
+{{- end }}

@@ -1,0 +1,16 @@
+{{- if .Values.clientTrafficPolicy.enabled }}
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: ClientTrafficPolicy
+metadata:
+  name: {{ .Values.clientTrafficPolicy.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "envoy-gateway-config.labels" . | nindent 4 }}
+spec:
+  targetRef:
+    {{- toYaml .Values.clientTrafficPolicy.targetRef | nindent 4 }}
+  {{- with .Values.clientTrafficPolicy.clientIPDetection }}
+  clientIPDetection:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

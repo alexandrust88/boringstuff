@@ -1,0 +1,200 @@
+# =============================================================================
+# cilium helm values - AKS-managed cilium 1.17
+# =============================================================================
+#
+# IMPORTANT: on AKS, Azure manages the cilium CNI. you do NOT install cilium
+# via helm directly. Azure controls the cilium-agent daemonset.
+#
+# however, you CAN override cilium configuration via the AKS cilium configmap
+# or via AKS cluster configuration (az aks create/update).
+#
+# this file documents:
+#   1. what azure configures by default
+#   2. what you can customize via configmap overrides
+#   3. the cilium helm values equivalent (for reference)
+#
+# AKS cilium 1.17 specifics:
+#   - hubble is embedded in cilium-agent (no separate relay deployment)
+#   - no hubble relay (azure does not deploy it)
+#   - no hubble UI
+#   - no clustermesh
+#   - IPAM is azure-delegated (azure manages pod IPs via azure VNET)
+#   - kube-proxy replacement is enabled by default
+#   - metrics ports: 9962 (agent), 6942 (operator), 9965 (hubble embedded)
+#
+# ports reference:
+#   9962 - cilium-agent prometheus metrics
+#   6942 - cilium-operator prometheus metrics
+#   9965 - hubble metrics (embedded in cilium-agent, per-node)
+#
+# to check what's actually running:
+#   kubectl get ds -n kube-system cilium
+#   kubectl get deploy -n kube-system cilium-operator
+#   kubectl get cm cilium-config -n kube-system -o yaml
+#
+# references:
+#   - https://learn.microsoft.com/en-us/azure/aks/azure-cni-powered-by-cilium
+#   - https://docs.cilium.io/en/v1.17/observability/metrics/
+# =============================================================================
+
+
+# =============================================================================
+# AKS cilium configmap overrides
+# =============================================================================
+# you can patch the cilium-config configmap to enable metrics and hubble plugins.
+# NOTE: AKS may reset these on upgrades. use az aks update where possible.
+#
+# kubectl edit cm cilium-config -n kube-system
+# OR
+# kubectl patch cm cilium-config -n kube-system --type merge -p '<patch>'
+# =============================================================================
+
+cilium_configmap_overrides:
+
+  # --- enable prometheus metrics on agent ---
+  # these should already be enabled on AKS cilium 1.17
+  # verify: kubectl get cm cilium-config -n kube-system -o yaml | grep prometheus
+  prometheus-serve-addr: ":9962"
+  operator-prometheus-serve-addr: ":6942"
+  enable-metrics: "true"
+
+  # --- hubble configuration ---
+  # hubble is embedded in cilium-agent on AKS (no relay needed)
+  enable-hubble: "true"
+  hubble-metrics-server: ":9965"
+
+  # hubble metric plugins (what AKS typically enables by default)
+  # you can customize this to add more plugins
+  hubble-metrics:
+    # AKS default (minimal):
+    # - "dns"
+    # - "drop"
+    # - "flow"
+    # - "tcp"
+    #
+    # recommended (full observability, no relay needed):
+    - "dns:query;ignoreAAAA;labelsContext=source_namespace,destination_namespace"
+    - "drop:sourceContext=namespace|reserved-identity;destinationContext=namespace|reserved-identity;labelsContext=source_namespace,destination_namespace,traffic_direction"
+    - "tcp:sourceContext=namespace|reserved-identity;destinationContext=namespace|reserved-identity"
+    - "flow:sourceContext=namespace|reserved-identity;destinationContext=namespace|reserved-identity;labelsContext=traffic_direction"
+    - "httpV2:exemplars=true;labelsContext=source_namespace,source_workload,destination_namespace,destination_workload,traffic_direction"
+    - "icmp:sourceContext=namespace|reserved-identity;destinationContext=namespace|reserved-identity"
+    - "policy:sourceContext=namespace|reserved-identity;destinationContext=namespace|reserved-identity;labelsContext=traffic_direction"
+    - "port-distribution:sourceContext=namespace;destinationContext=namespace"
+    - "flows-to-world:any-drop;port;syn-only;labelsContext=source_namespace,destination_namespace"
+    # NOTE: kafka and sctp plugins omitted (rarely needed on AKS)
+
+  # --- bpf configuration ---
+  enable-bpf-masquerade: "true"
+  monitor-aggregation: "medium"
+  monitor-aggregation-interval: "5s"
+  monitor-aggregation-flags: "all"
+  bpf-events-drop: "enabled"
+  bpf-events-policy-verdict: "enabled"
+  bpf-events-trace: "enabled"
+
+
+# =============================================================================
+# equivalent cilium helm values (for reference only - azure manages these)
+# =============================================================================
+# if you were installing cilium yourself (not AKS-managed), these are the values.
+# DO NOT apply these directly on AKS.
+
+cilium_helm_reference:
+
+  # agent metrics
+  prometheus:
+    enabled: true
+    port: 9962
+
+  # operator metrics
+  operator:
+    prometheus:
+      enabled: true
+      port: 6942
+
+  # hubble (embedded, no relay on AKS)
+  hubble:
+    enabled: true
+    relay:
+      enabled: false           # AKS does NOT deploy hubble-relay
+    ui:
+      enabled: false           # AKS does NOT deploy hubble-ui
+    metrics:
+      port: 9965
+      enableOpenMetrics: true
+      enabled:
+        - "dns:query;ignoreAAAA;labelsContext=source_namespace,destination_namespace"
+        - "drop:sourceContext=namespace|reserved-identity;destinationContext=namespace|reserved-identity;labelsContext=source_namespace,destination_namespace,traffic_direction"
+        - "tcp:sourceContext=namespace|reserved-identity;destinationContext=namespace|reserved-identity"
+        - "flow:sourceContext=namespace|reserved-identity;destinationContext=namespace|reserved-identity;labelsContext=traffic_direction"
+        - "httpV2:exemplars=true;labelsContext=source_namespace,source_workload,destination_namespace,destination_workload,traffic_direction"
+        - "icmp:sourceContext=namespace|reserved-identity;destinationContext=namespace|reserved-identity"
+        - "policy:sourceContext=namespace|reserved-identity;destinationContext=namespace|reserved-identity;labelsContext=traffic_direction"
+        - "port-distribution:sourceContext=namespace;destinationContext=namespace"
+        - "flows-to-world:any-drop;port;syn-only;labelsContext=source_namespace,destination_namespace"
+
+  # NOT available on AKS:
+  # envoy: disabled (no L7 proxy unless manually configured)
+  # clustermesh: disabled
+  # relay: disabled
+  # ui: disabled
+
+  # BPF
+  bpf:
+    events:
+      drop:
+        enabled: true
+      policyVerdict:
+        enabled: true
+      trace:
+        enabled: true
+    monitorAggregation: medium
+    monitorInterval: "5s"
+    monitorFlags: all
+
+  # IPAM - azure-delegated (azure manages pod IPs)
+  ipam:
+    mode: delegated-plugin      # azure VNET IPAM
+
+  # kube-proxy replacement (enabled by default on AKS cilium)
+  kubeProxyReplacement: true
+
+
+# =============================================================================
+# AKS-specific: how to enable/verify cilium metrics
+# =============================================================================
+
+aks_verification:
+  check_cilium_running:
+    - "kubectl get ds -n kube-system | grep cilium"
+    - "kubectl get deploy -n kube-system | grep cilium"
+
+  check_current_config:
+    - "kubectl get cm cilium-config -n kube-system -o yaml"
+    - "kubectl get cm cilium-config -n kube-system -o yaml | grep -E 'prometheus|hubble|metrics'"
+
+  verify_metrics_endpoints:
+    - desc: "agent metrics"
+      cmd: "kubectl exec -n kube-system ds/cilium -- curl -s localhost:9962/metrics | head -20"
+    - desc: "hubble metrics (embedded in agent)"
+      cmd: "kubectl exec -n kube-system ds/cilium -- curl -s localhost:9965/metrics | head -20"
+    - desc: "operator metrics"
+      cmd: "kubectl exec -n kube-system deploy/cilium-operator -- curl -s localhost:6942/metrics | head -20"
+
+  check_hubble_status:
+    - desc: "hubble status (no relay, embedded only)"
+      cmd: "kubectl exec -n kube-system ds/cilium -- cilium-dbg status | grep Hubble"
+    - desc: "list enabled hubble plugins"
+      cmd: "kubectl get cm cilium-config -n kube-system -o yaml | grep hubble-metrics"
+
+  patch_hubble_metrics:
+    desc: "enable full hubble metrics on AKS (patch configmap)"
+    cmd: |
+      kubectl patch cm cilium-config -n kube-system --type merge -p '
+      {
+        "data": {
+          "hubble-metrics": "dns:query;ignoreAAAA;labelsContext=source_namespace,destination_namespace drop:sourceContext=namespace|reserved-identity;destinationContext=namespace|reserved-identity;labelsContext=source_namespace,destination_namespace,traffic_direction tcp:sourceContext=namespace|reserved-identity;destinationContext=namespace|reserved-identity flow:sourceContext=namespace|reserved-identity;destinationContext=namespace|reserved-identity;labelsContext=traffic_direction httpV2:exemplars=true;labelsContext=source_namespace,source_workload,destination_namespace,destination_workload,traffic_direction icmp:sourceContext=namespace|reserved-identity;destinationContext=namespace|reserved-identity policy:sourceContext=namespace|reserved-identity;destinationContext=namespace|reserved-identity;labelsContext=traffic_direction port-distribution:sourceContext=namespace;destinationContext=namespace flows-to-world:any-drop;port;syn-only;labelsContext=source_namespace,destination_namespace"
+        }
+      }'
+    note: "restart cilium daemonset after patching: kubectl rollout restart ds/cilium -n kube-system"

@@ -1,0 +1,541 @@
+# =============================================================================
+# datadog monitors + SLO definitions for cilium
+# =============================================================================
+# apply via:
+#   - datadog terraform provider (datadog_monitor / datadog_service_level_objective)
+#   - datadog api (POST /api/v1/monitor / POST /api/v1/slo)
+#   - datadog ui (monitors -> new monitor -> import)
+#
+# references:
+#   - https://docs.datadoghq.com/api/latest/monitors/
+#   - https://docs.datadoghq.com/api/latest/service-level-objectives/
+#   - https://www.datadoghq.com/blog/cilium-metrics-and-architecture/
+#   - https://www.datadoghq.com/blog/cilium-operations-at-scale/
+# =============================================================================
+
+
+# =============================================================================
+# 1. CRITICAL MONITORS - data plane and control plane health
+# =============================================================================
+
+monitors:
+
+  # --- data plane critical ---
+
+  - name: "cilium: bpf map pressure critical"
+    type: metric alert
+    priority: 1
+    query: "avg(last_5m):max:cilium.bpf.map_pressure{*} by {map_name,host} > 0.9"
+    message: |
+      {{#is_alert}}
+      BPF map **{{map_name.name}}** on **{{host.name}}** at **{{value}}** pressure.
+      Values above 0.9 predict imminent datapath failures.
+
+      **Actions:**
+      - `kubectl exec -n kube-system ds/cilium -- cilium-dbg bpf ct list global | wc -l`
+      - Check conntrack table size and connection patterns
+      - Consider increasing map size via `bpf-map-dynamic-size-ratio`
+      - Avoid resizing during peak traffic
+      {{/is_alert}}
+    thresholds:
+      critical: 0.9
+      warning: 0.75
+    tags:
+      - "service:cilium"
+      - "team:platform"
+      - "severity:critical"
+
+  - name: "cilium: high drop rate"
+    type: metric alert
+    priority: 1
+    query: "sum(last_5m):sum:cilium.drop_count.count{*} by {reason,direction}.as_rate() > 100"
+    message: |
+      {{#is_alert}}
+      High packet drops: **{{value}}/sec**.
+      Reason: **{{reason.name}}**, Direction: **{{direction.name}}**.
+
+      **Actions:**
+      - `kubectl exec -n kube-system ds/cilium -- cilium-dbg monitor --type drop`
+      - Check if drop reason is policy-related or datapath-related
+      - Review recent CiliumNetworkPolicy changes
+      {{/is_alert}}
+    thresholds:
+      critical: 100
+      warning: 50
+    tags:
+      - "service:cilium"
+      - "severity:critical"
+
+  - name: "cilium: unreachable nodes"
+    type: metric alert
+    priority: 1
+    query: "max(last_5m):max:cilium.unreachable.nodes{*} by {host} > 0"
+    message: |
+      {{#is_alert}}
+      **{{host.name}}** reports **{{value}}** unreachable nodes.
+
+      **Actions:**
+      - `kubectl exec -n kube-system ds/cilium -- cilium-dbg status`
+      - `kubectl exec -n kube-system ds/cilium -- cilium-dbg node list`
+      - Check node network connectivity and cilium agent logs
+      {{/is_alert}}
+    thresholds:
+      critical: 0
+    tags:
+      - "service:cilium"
+      - "severity:critical"
+
+  # --- control plane critical ---
+
+  - name: "cilium: failing controllers"
+    type: metric alert
+    priority: 1
+    query: "max(last_5m):max:cilium.controllers.failing.count{*} by {host} > 0"
+    message: |
+      {{#is_alert}}
+      **{{value}}** failing controllers on **{{host.name}}**.
+
+      **Actions:**
+      - `kubectl exec -n kube-system ds/cilium -- cilium-dbg status`
+      - `kubectl exec -n kube-system ds/cilium -- cilium-dbg status --all-controllers`
+      - Check cilium-agent logs for controller errors
+      {{/is_alert}}
+    thresholds:
+      critical: 0
+    tags:
+      - "service:cilium"
+      - "severity:critical"
+
+  # NOTE: KVStore/etcd monitor removed for AKS.
+  # AKS-managed Cilium uses CRD-based state storage, not etcd.
+  # kvstore.quorum_errors metric will not be populated.
+  # If running self-managed Cilium with etcd, add:
+  #   - name: "cilium: kvstore quorum errors"
+  #     query: "sum(last_5m):sum:cilium.kvstore.quorum_errors.count{*}.as_count() > 0"
+
+  - name: "cilium: policy import errors"
+    type: metric alert
+    priority: 1
+    query: "sum(last_10m):sum:cilium.policy.import_errors.count{*}.as_count() > 0"
+    message: |
+      {{#is_alert}}
+      Policy import failures detected.
+
+      **Actions:**
+      - `kubectl get cnp -A | grep -v True`
+      - `kubectl get ccnp -A | grep -v True`
+      - Check CiliumNetworkPolicy syntax and selectors
+      {{/is_alert}}
+    thresholds:
+      critical: 0
+    tags:
+      - "service:cilium"
+      - "severity:critical"
+
+  # --- endpoint health ---
+
+  - name: "cilium: endpoint regeneration failures"
+    type: metric alert
+    priority: 2
+    query: "sum(last_10m):sum:cilium.endpoint.regenerations.count{outcome:fail}.as_count() > 5"
+    message: |
+      {{#is_alert}}
+      Endpoint regeneration failures: **{{value}}**.
+
+      **Actions:**
+      - `kubectl exec -n kube-system ds/cilium -- cilium-dbg endpoint list`
+      - Check for BPF compilation errors in cilium-agent logs
+      - Verify sufficient CPU/memory on the node
+      - Check BPF map pressure (may cause regen failures)
+      {{/is_alert}}
+    thresholds:
+      critical: 5
+      warning: 2
+    tags:
+      - "service:cilium"
+      - "severity:warning"
+
+
+# =============================================================================
+# 2. SECURITY MONITORS
+# =============================================================================
+
+  - name: "cilium: hubble policy denials spike"
+    type: metric alert
+    priority: 2
+    query: "sum(last_5m):sum:cilium.hubble.policy_verdicts_total{verdict:dropped}.as_count() > 100"
+    message: |
+      {{#is_alert}}
+      **{{value}}** policy denials in last 5 minutes.
+
+      **Actions:**
+      - Check if this is expected (new policy rollout) or unexpected (attack/misconfiguration)
+      - `kubectl exec -n kube-system ds/cilium -- hubble observe --verdict DROPPED --last 50`
+      - Review recent CiliumNetworkPolicy changes
+      {{/is_alert}}
+    thresholds:
+      critical: 100
+      warning: 50
+    tags:
+      - "service:cilium"
+      - "severity:security"
+
+  # NOTE: L7 monitors removed - AKS-managed Cilium does not deploy Envoy L7 proxy.
+  # If you enable Envoy in the future, add monitors for:
+  #   cilium.policy.l7_denied.count
+  #   cilium.policy.l7_parse_errors.count
+
+
+# =============================================================================
+# 3. OBSERVABILITY MONITORS
+# =============================================================================
+
+  - name: "cilium: hubble lost events"
+    type: metric alert
+    priority: 3
+    query: "sum(last_5m):sum:cilium.hubble.lost_events_total{*} by {source}.as_count() > 1000"
+    message: |
+      {{#is_alert}}
+      Hubble losing events from **{{source.name}}**: **{{value}}**.
+
+      **Actions:**
+      - Consider increasing hubble ring buffer size
+      - Reduce monitor aggregation level
+      - Apply rate limits to high-volume flow events
+      - `kubectl exec -n kube-system ds/cilium -- hubble status`
+      {{/is_alert}}
+    thresholds:
+      critical: 1000
+      warning: 500
+    tags:
+      - "service:cilium"
+      - "severity:warning"
+
+  - name: "cilium: high dns nxdomain rate"
+    type: metric alert
+    priority: 3
+    # NOTE: rcode tag values depend on Cilium version. Common values:
+    #   "Non-Existent Domain" (Cilium 1.17+), "NXDomain", "nxdomain"
+    #   Check your actual tag values: kubectl exec -n kube-system ds/cilium -- curl -s localhost:9965/metrics | grep dns_responses
+    query: >
+      sum(last_5m):sum:cilium.hubble.dns_responses_total{rcode:Non-Existent Domain}.as_count()
+      / sum:cilium.hubble.dns_responses_total{*}.as_count() > 0.3
+    message: |
+      {{#is_alert}}
+      30%+ DNS queries returning NXDOMAIN.
+
+      **Actions:**
+      - Check for DNS misconfiguration in application deployments
+      - Look for DGA-like patterns (high NXDOMAIN from single source)
+      - Review CoreDNS / kube-dns configuration
+      - `kubectl exec -n kube-system ds/cilium -- hubble observe --protocol dns --verdict DROPPED --last 50`
+      {{/is_alert}}
+    thresholds:
+      critical: 0.3
+      warning: 0.15
+    tags:
+      - "service:cilium"
+      - "severity:warning"
+
+
+# =============================================================================
+# 4. ANOMALY DETECTION MONITORS (beyond default)
+# =============================================================================
+
+  - name: "cilium: drop rate anomaly detected"
+    type: metric alert
+    priority: 2
+    query: >
+      avg(last_15m):anomalies(sum:cilium.drop_count.count{*}.as_rate(),
+      'agile', 3, direction='above', interval=60, alert_window='last_15m',
+      count_default_zero='true', seasonality='daily') >= 1
+    message: |
+      {{#is_alert}}
+      Anomalous drop rate spike detected.
+      Current rate is significantly above the baseline pattern.
+
+      **Actions:**
+      - Check for recent policy changes or deployments
+      - `kubectl exec -n kube-system ds/cilium -- cilium-dbg monitor --type drop`
+      - Correlate with deployment events
+      {{/is_alert}}
+    tags:
+      - "service:cilium"
+      - "severity:anomaly"
+
+  - name: "cilium: external traffic anomaly (flows-to-world)"
+    type: metric alert
+    priority: 2
+    query: >
+      avg(last_20m):anomalies(sum:cilium.hubble.flows_to_world_total{*}.as_rate(),
+      'robust', 3, direction='above', interval=60, alert_window='last_20m',
+      count_default_zero='true', seasonality='daily') >= 1
+    message: |
+      {{#is_alert}}
+      Anomalous external traffic pattern detected.
+      Egress to external destinations is significantly above baseline.
+
+      **Actions:**
+      - Check for data exfiltration or unauthorized external access
+      - `kubectl exec -n kube-system ds/cilium -- hubble observe --to-identity world --last 100`
+      - Review flows-to-world by source namespace
+      {{/is_alert}}
+    tags:
+      - "service:cilium"
+      - "severity:security"
+
+  - name: "cilium: dns query pattern anomaly"
+    type: metric alert
+    priority: 3
+    query: >
+      avg(last_15m):anomalies(sum:cilium.hubble.dns_queries_total{*}.as_rate(),
+      'agile', 3, direction='both', interval=60, alert_window='last_15m',
+      count_default_zero='true', seasonality='daily') >= 1
+    message: |
+      {{#is_alert}}
+      Anomalous DNS query pattern detected.
+      May indicate DNS tunneling, DGA domains, or DNS-based exfiltration.
+
+      **Actions:**
+      - Check DNS query sources and patterns
+      - Look for high NXDOMAIN rates from specific sources
+      - `kubectl exec -n kube-system ds/cilium -- hubble observe --protocol dns --last 100`
+      {{/is_alert}}
+    tags:
+      - "service:cilium"
+      - "severity:anomaly"
+
+  - name: "cilium: policy verdict change anomaly"
+    type: metric alert
+    priority: 2
+    query: >
+      avg(last_15m):anomalies(sum:cilium.hubble.policy_verdicts_total{verdict:dropped}.as_count(),
+      'agile', 2, direction='above', interval=60, alert_window='last_15m',
+      count_default_zero='true', seasonality='daily') >= 1
+    message: |
+      {{#is_alert}}
+      Anomalous spike in policy denials detected.
+
+      **Actions:**
+      - Check for recent CiliumNetworkPolicy changes
+      - Verify if a new deployment is being blocked by existing policies
+      - Review deny verdicts by source/destination namespace
+      {{/is_alert}}
+    tags:
+      - "service:cilium"
+      - "severity:security"
+
+  - name: "cilium: agent cpu outlier detected"
+    type: metric alert
+    priority: 3
+    query: >
+      avg(last_15m):outliers(avg:cilium.process.cpu.seconds.count{*} by {host}.as_rate(),
+      'DBSCAN', 3) > 0
+    message: |
+      {{#is_alert}}
+      Cilium agent CPU usage on one or more hosts is significantly different from peers.
+      This may indicate a localized issue (hot node, traffic imbalance, stuck controller).
+
+      **Actions:**
+      - Identify the outlier host(s) from the monitor graph
+      - Check controller status and endpoint count on the outlier
+      - Look for conntrack table pressure or policy regeneration storms
+      {{/is_alert}}
+    tags:
+      - "service:cilium"
+      - "severity:anomaly"
+
+
+# =============================================================================
+# 5. CAPACITY MONITORS
+# =============================================================================
+
+  - name: "cilium: identity count approaching limit"
+    type: metric alert
+    priority: 2
+    query: "max(last_15m):sum:cilium.identity.count{*} > 50000"
+    message: |
+      {{#is_alert}}
+      Identity count at **{{value}}** (limit: 65535).
+
+      **Actions:**
+      - Review identity-relevant labels (reduce high-cardinality prefixes)
+      - Check identity garbage collection frequency
+      - `kubectl exec -n kube-system ds/cilium -- cilium-dbg identity list | wc -l`
+      {{/is_alert}}
+    thresholds:
+      critical: 60000
+      warning: 50000
+    tags:
+      - "service:cilium"
+      - "severity:capacity"
+
+  - name: "cilium: bpf map fill rate projection"
+    type: metric alert
+    priority: 2
+    query: >
+      avg(last_1h):forecast(avg:cilium.bpf.map_pressure{*} by {map_name},
+      'linear', 1, interval='60m', history='1w') > 0.9
+    message: |
+      {{#is_alert}}
+      BPF map **{{map_name.name}}** projected to exceed 90% within forecast window.
+
+      **Actions:**
+      - Check current map pressure trend
+      - Consider increasing bpf-map-dynamic-size-ratio
+      - Plan map resize during maintenance window (avoid peak traffic)
+      {{/is_alert}}
+    thresholds:
+      critical: 0.9
+      warning: 0.8
+    tags:
+      - "service:cilium"
+      - "severity:capacity"
+
+
+# =============================================================================
+# 6. COMPOSITE MONITORS
+# =============================================================================
+
+  - name: "cilium: overall health degraded"
+    type: composite
+    priority: 1
+    query: "<failing_controllers_monitor_id> || <unreachable_nodes_monitor_id> || <policy_import_errors_monitor_id>"
+    message: |
+      {{#is_alert}}
+      Cilium overall health is degraded. One or more critical subsystems are failing:
+      - Failing controllers
+      - Unreachable nodes
+      - Policy import errors
+
+      Check individual monitors for specific details and runbook actions.
+      {{/is_alert}}
+    tags:
+      - "service:cilium"
+      - "severity:critical"
+
+  - name: "cilium: security posture degraded"
+    type: composite
+    priority: 1
+    query: "<policy_denials_monitor_id> || <drop_anomaly_monitor_id> || <external_traffic_anomaly_monitor_id>"
+    message: |
+      {{#is_alert}}
+      Cilium security posture is degraded. Multiple security signals are firing:
+      - Policy denial spikes
+      - Drop rate anomalies
+      - External traffic anomalies
+
+      Investigate for potential security incidents or policy misconfigurations.
+      {{/is_alert}}
+    tags:
+      - "service:cilium"
+      - "severity:security"
+
+
+# =============================================================================
+# 7. SLO DEFINITIONS
+# =============================================================================
+# create via:
+#   - datadog terraform: datadog_service_level_objective
+#   - datadog api: POST /api/v1/slo
+# =============================================================================
+
+slos:
+
+  - name: "Cilium Network Availability"
+    type: monitor
+    description: |
+      Tracks that all cluster nodes are reachable via Cilium.
+      Based on the unreachable nodes monitor.
+    monitor_ids:
+      - "<unreachable_nodes_monitor_id>"
+    thresholds:
+      - timeframe: "7d"
+        target: 99.9
+        warning: 99.95
+      - timeframe: "30d"
+        target: 99.9
+        warning: 99.95
+      - timeframe: "90d"
+        target: 99.9
+        warning: 99.95
+    tags:
+      - "service:cilium"
+      - "slo:network-availability"
+
+  - name: "Cilium Policy Enforcement Success"
+    type: metric
+    description: |
+      Tracks the ratio of forwarded packets to total (forwarded + all drops).
+      Target: 99.95% of packets are forwarded successfully.
+    query:
+      numerator: "sum:cilium.forward_count.count{*}.as_count()"
+      denominator: "sum:cilium.forward_count.count{*}.as_count() + sum:cilium.drop_count.count{*}.as_count()"
+    thresholds:
+      - timeframe: "7d"
+        target: 99.95
+        warning: 99.97
+      - timeframe: "30d"
+        target: 99.95
+        warning: 99.97
+    tags:
+      - "service:cilium"
+      - "slo:policy-enforcement"
+
+  - name: "Cilium Endpoint Health"
+    type: metric
+    description: |
+      Tracks endpoint regeneration success rate.
+      Target: 99.9% of endpoint regenerations succeed.
+    query:
+      numerator: "sum:cilium.endpoint.regenerations.count{outcome:success}.as_count()"
+      denominator: "sum:cilium.endpoint.regenerations.count{*}.as_count()"
+    thresholds:
+      - timeframe: "7d"
+        target: 99.9
+        warning: 99.95
+      - timeframe: "30d"
+        target: 99.9
+        warning: 99.95
+    tags:
+      - "service:cilium"
+      - "slo:endpoint-health"
+
+  - name: "Hubble Observability Coverage"
+    type: metric
+    description: |
+      Tracks that Hubble is not losing events.
+      Target: 99.5% of flows are captured (less than 0.5% lost).
+    query:
+      numerator: "sum:cilium.hubble.flows_processed_total{*}.as_count()"
+      denominator: "sum:cilium.hubble.flows_processed_total{*}.as_count() + sum:cilium.hubble.lost_events_total{*}.as_count()"
+    thresholds:
+      - timeframe: "7d"
+        target: 99.5
+        warning: 99.7
+      - timeframe: "30d"
+        target: 99.5
+        warning: 99.7
+    tags:
+      - "service:cilium"
+      - "slo:hubble-coverage"
+
+  - name: "Cilium DNS Resolution Success"
+    type: metric
+    description: |
+      Tracks DNS resolution success rate via Hubble.
+      Target: 99.0% of DNS queries return NoError.
+      NOTE: rcode tag value depends on Cilium version - verify actual values.
+    query:
+      numerator: "sum:cilium.hubble.dns_responses_total{rcode:No Error}.as_count()"
+      denominator: "sum:cilium.hubble.dns_responses_total{*}.as_count()"
+    thresholds:
+      - timeframe: "7d"
+        target: 99.0
+        warning: 99.5
+      - timeframe: "30d"
+        target: 99.0
+        warning: 99.5
+    tags:
+      - "service:cilium"
+      - "slo:dns-resolution"

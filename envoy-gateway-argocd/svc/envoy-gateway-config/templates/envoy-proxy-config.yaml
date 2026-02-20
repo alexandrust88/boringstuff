@@ -1,0 +1,52 @@
+{{- if .Values.envoyProxy.enabled }}
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: {{ .Values.envoyProxy.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "envoy-gateway-config.labels" . | nindent 4 }}
+spec:
+  provider:
+    type: {{ .Values.envoyProxy.provider.type }}
+    kubernetes:
+      envoyDeployment:
+        replicas: {{ .Values.envoyProxy.provider.kubernetes.envoyDeployment.replicas }}
+        strategy:
+          {{- toYaml .Values.envoyProxy.provider.kubernetes.envoyDeployment.strategy | nindent 10 }}
+        pod:
+          {{- with .Values.envoyProxy.provider.kubernetes.envoyDeployment.pod.annotations }}
+          annotations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.envoyProxy.provider.kubernetes.envoyDeployment.pod.labels }}
+          labels:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            {{- toYaml .Values.envoyProxy.provider.kubernetes.envoyDeployment.pod.securityContext | nindent 12 }}
+        container:
+          securityContext:
+            {{- toYaml .Values.envoyProxy.provider.kubernetes.envoyDeployment.container.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.envoyProxy.provider.kubernetes.envoyDeployment.container.resources | nindent 12 }}
+      envoyService:
+        type: {{ .Values.envoyProxy.provider.kubernetes.envoyService.type }}
+        {{- with .Values.envoyProxy.provider.kubernetes.envoyService.externalTrafficPolicy }}
+        externalTrafficPolicy: {{ . }}
+        {{- end }}
+        {{- with .Values.envoyProxy.provider.kubernetes.envoyService.annotations }}
+        annotations:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+      envoyHpa:
+        {{- toYaml .Values.envoyProxy.provider.kubernetes.envoyHpa | nindent 8 }}
+  {{- with .Values.envoyProxy.logging }}
+  logging:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.envoyProxy.telemetry }}
+  telemetry:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

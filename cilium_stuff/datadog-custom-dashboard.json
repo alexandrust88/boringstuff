@@ -1,0 +1,1367 @@
+{
+  "title": "Cilium Deep Insights (AKS / Fleet)",
+  "description": "Advanced Cilium dashboard for AKS fleets. Goes beyond the default integration page with: security posture scoring, anomaly detection, capacity planning, SLO tracking, and eBPF health. Uses correct metric names from the Datadog Cilium integration (OpenMetrics v2). NOTE: AKS-managed Cilium 1.17 - no hubble relay, no envoy L7 proxy, no clustermesh.",
+  "layout_type": "ordered",
+  "is_read_only": false,
+  "notify_list": [],
+  "template_variables": [
+    {
+      "name": "cluster",
+      "prefix": "kube_cluster_name",
+      "available_values": [],
+      "default": "*"
+    },
+    {
+      "name": "node",
+      "prefix": "host",
+      "available_values": [],
+      "default": "*"
+    },
+    {
+      "name": "namespace",
+      "prefix": "kube_namespace",
+      "available_values": [],
+      "default": "*"
+    }
+  ],
+  "template_variable_presets": [
+    {
+      "name": "All Clusters",
+      "template_variables": [
+        { "name": "cluster", "value": "*" },
+        { "name": "node", "value": "*" },
+        { "name": "namespace", "value": "*" }
+      ]
+    },
+    {
+      "name": "Production Only",
+      "template_variables": [
+        { "name": "cluster", "value": "prod-*" },
+        { "name": "node", "value": "*" },
+        { "name": "namespace", "value": "*" }
+      ]
+    }
+  ],
+  "widgets": [
+    {
+      "definition": {
+        "type": "note",
+        "content": "## Cilium Deep Insights Dashboard\n\nThis dashboard goes beyond the default Cilium integration page. Set **$cluster** and optionally **$node** / **$namespace** at the top.\n\n**Metric naming:** Uses OpenMetrics v2 naming (`cilium.drop_count.count`, `cilium.hubble.flows_processed_total`, etc). If a widget shows 'No data', verify your Cilium + Datadog agent configuration matches the metrics reference.\n\n**Sections:** Security Posture → Agent/Operator Health → Drops & Network → Hubble Flows → DNS → TCP → eBPF Health → Policy → Capacity Planning → Kubernetes → Operator → Resources\n\n**AKS note:** No Envoy L7 proxy, no hubble relay (embedded in agent), no clustermesh. IPAM is Azure-delegated.",
+        "background_color": "vivid_blue",
+        "font_size": "14",
+        "text_align": "left",
+        "show_tick": false
+      }
+    },
+
+    {
+      "definition": {
+        "type": "group",
+        "title": "Security Posture",
+        "layout_type": "ordered",
+        "widgets": [
+          {
+            "definition": {
+              "type": "note",
+              "content": "**Security Posture** tracks policy enforcement coverage, drop-to-forward ratios, and denial trends. A healthy cluster has >90% policy coverage, <0.1% drop ratio, and stable denial rates.",
+              "background_color": "gray",
+              "font_size": "12",
+              "text_align": "left",
+              "show_tick": false
+            }
+          },
+          {
+            "definition": {
+              "type": "query_value",
+              "title": "Policy Coverage %",
+              "requests": [
+                {
+                  "formulas": [
+                    {
+                      "formula": "(query1 - query2) / query1 * 100",
+                      "limit": { "count": 1, "order": "desc" }
+                    }
+                  ],
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "query1",
+                      "query": "sum:cilium.endpoint.count{kube_cluster_name:$cluster,host:$node}",
+                      "aggregator": "last"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "query2",
+                      "query": "sum:cilium.policy.endpoint_enforcement_status{kube_cluster_name:$cluster,host:$node,policy_enforcement_status:none}",
+                      "aggregator": "last"
+                    }
+                  ],
+                  "response_format": "scalar"
+                }
+              ],
+              "precision": 1,
+              "autoscale": false,
+              "custom_unit": "%",
+              "conditional_formats": [
+                { "comparator": ">", "value": 90, "palette": "white_on_green" },
+                { "comparator": ">", "value": 70, "palette": "white_on_yellow" },
+                { "comparator": "<=", "value": 70, "palette": "white_on_red" }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "query_value",
+              "title": "Drop-to-Forward Ratio %",
+              "requests": [
+                {
+                  "formulas": [
+                    {
+                      "formula": "query1 / (query1 + query2) * 100"
+                    }
+                  ],
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "query1",
+                      "query": "sum:cilium.drop_count.count{kube_cluster_name:$cluster,host:$node}.as_rate()",
+                      "aggregator": "avg"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "query2",
+                      "query": "sum:cilium.forward_count.count{kube_cluster_name:$cluster,host:$node}.as_rate()",
+                      "aggregator": "avg"
+                    }
+                  ],
+                  "response_format": "scalar"
+                }
+              ],
+              "precision": 3,
+              "autoscale": false,
+              "custom_unit": "%",
+              "conditional_formats": [
+                { "comparator": "<=", "value": 0.1, "palette": "white_on_green" },
+                { "comparator": "<=", "value": 1, "palette": "white_on_yellow" },
+                { "comparator": ">", "value": 1, "palette": "white_on_red" }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "query_value",
+              "title": "Policy Denials (last timeframe)",
+              "requests": [
+                {
+                  "q": "sum:cilium.hubble.policy_verdicts_total{verdict:dropped,kube_cluster_name:$cluster}.as_count()",
+                  "aggregator": "sum"
+                }
+              ],
+              "precision": 0,
+              "conditional_formats": [
+                { "comparator": "<=", "value": 0, "palette": "white_on_green" },
+                { "comparator": "<=", "value": 50, "palette": "white_on_yellow" },
+                { "comparator": ">", "value": 50, "palette": "white_on_red" }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Policy Denials with Anomaly Detection",
+              "requests": [
+                {
+                  "q": "anomalies(sum:cilium.hubble.policy_verdicts_total{verdict:dropped,kube_cluster_name:$cluster}.as_count(), 'agile', 3)",
+                  "display_type": "line",
+                  "style": { "palette": "warm", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "change",
+              "title": "Policy Denials - Week over Week",
+              "requests": [
+                {
+                  "q": "sum:cilium.hubble.policy_verdicts_total{verdict:dropped,kube_cluster_name:$cluster}.as_count()",
+                  "change_type": "absolute",
+                  "compare_to": "week_before",
+                  "order_by": "change",
+                  "order_dir": "desc",
+                  "increase_good": false
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "toplist",
+              "title": "Top Denied Namespaces",
+              "requests": [
+                {
+                  "q": "top(sum:cilium.hubble.policy_verdicts_total{verdict:dropped,kube_cluster_name:$cluster} by {source_namespace}.as_count(), 10, 'sum', 'desc')"
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "treemap",
+              "title": "Drop Reasons Distribution",
+              "requests": [
+                {
+                  "formulas": [{ "formula": "query1" }],
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "query1",
+                      "query": "sum:cilium.drop_count.count{kube_cluster_name:$cluster} by {reason}.as_count()",
+                      "aggregator": "sum"
+                    }
+                  ],
+                  "response_format": "scalar"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+
+    {
+      "definition": {
+        "type": "group",
+        "title": "Agent / Operator Health",
+        "layout_type": "ordered",
+        "widgets": [
+          {
+            "definition": {
+              "type": "check_status",
+              "title": "Cilium Agent Check Status",
+              "check": "cilium.prometheus.health",
+              "grouping": "cluster",
+              "group_by": ["kube_cluster_name"],
+              "tags": ["kube_cluster_name:$cluster"]
+            }
+          },
+          {
+            "definition": {
+              "type": "query_value",
+              "title": "Failing Controllers",
+              "requests": [
+                {
+                  "q": "max:cilium.controllers.failing.count{kube_cluster_name:$cluster,host:$node}",
+                  "aggregator": "last"
+                }
+              ],
+              "precision": 0,
+              "conditional_formats": [
+                { "comparator": "<=", "value": 0, "palette": "white_on_green" },
+                { "comparator": ">", "value": 0, "palette": "white_on_red" }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "query_value",
+              "title": "Unreachable Nodes",
+              "requests": [
+                {
+                  "q": "max:cilium.unreachable.nodes{kube_cluster_name:$cluster,host:$node}",
+                  "aggregator": "last"
+                }
+              ],
+              "precision": 0,
+              "conditional_formats": [
+                { "comparator": "<=", "value": 0, "palette": "white_on_green" },
+                { "comparator": ">", "value": 0, "palette": "white_on_red" }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "query_value",
+              "title": "Ready Endpoints",
+              "requests": [
+                {
+                  "q": "sum:cilium.endpoint.count{kube_cluster_name:$cluster}",
+                  "aggregator": "last"
+                }
+              ],
+              "precision": 0,
+              "autoscale": true
+            }
+          },
+          {
+            "definition": {
+              "type": "query_value",
+              "title": "Active Policies",
+              "requests": [
+                {
+                  "q": "max:cilium.policy.count{kube_cluster_name:$cluster}",
+                  "aggregator": "last"
+                }
+              ],
+              "precision": 0
+            }
+          },
+          {
+            "definition": {
+              "type": "query_value",
+              "title": "Identities",
+              "requests": [
+                {
+                  "q": "sum:cilium.identity.count{kube_cluster_name:$cluster}",
+                  "aggregator": "last"
+                }
+              ],
+              "precision": 0
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Unreachable Nodes Over Time",
+              "requests": [
+                {
+                  "q": "max:cilium.unreachable.nodes{kube_cluster_name:$cluster} by {host}",
+                  "display_type": "bars",
+                  "style": { "palette": "warm" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Agent Restarts (by node)",
+              "requests": [
+                {
+                  "q": "sum:kubernetes.containers.restarts{kube_cluster_name:$cluster,kube_container_name:cilium-agent,host:$node} by {host}",
+                  "display_type": "bars"
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Operator Restarts",
+              "requests": [
+                {
+                  "q": "sum:kubernetes.containers.restarts{kube_cluster_name:$cluster,kube_container_name:cilium-operator} by {kube_cluster_name}",
+                  "display_type": "bars"
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Controller Execution Rate by Status",
+              "requests": [
+                {
+                  "q": "sum:cilium.controllers.runs.count{kube_cluster_name:$cluster,host:$node} by {status}.as_count()",
+                  "display_type": "bars",
+                  "style": { "palette": "dog_classic" }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+
+    {
+      "definition": {
+        "type": "group",
+        "title": "Drops & Network Traffic (SRE Critical)",
+        "layout_type": "ordered",
+        "widgets": [
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Drop Rate with Anomaly Detection",
+              "requests": [
+                {
+                  "q": "anomalies(sum:cilium.drop_count.count{kube_cluster_name:$cluster,host:$node}.as_rate(), 'agile', 3)",
+                  "display_type": "line",
+                  "style": { "palette": "warm" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Drop Rate by Reason",
+              "requests": [
+                {
+                  "q": "sum:cilium.drop_count.count{kube_cluster_name:$cluster,host:$node} by {reason}.as_rate()",
+                  "display_type": "bars",
+                  "style": { "palette": "warm" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "toplist",
+              "title": "Top Drop Reasons (15m)",
+              "requests": [
+                {
+                  "q": "top(sum:cilium.drop_count.count{kube_cluster_name:$cluster} by {reason}.as_count(), 15, 'sum', 'desc')"
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Drops by Direction (ingress/egress)",
+              "requests": [
+                {
+                  "q": "sum:cilium.drop_count.count{kube_cluster_name:$cluster,host:$node,direction:ingress}.as_rate()",
+                  "display_type": "area",
+                  "style": { "palette": "cool" }
+                },
+                {
+                  "q": "sum:cilium.drop_count.count{kube_cluster_name:$cluster,host:$node,direction:egress}.as_rate()",
+                  "display_type": "area",
+                  "style": { "palette": "warm" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Forwarded Bytes (ingress vs egress)",
+              "requests": [
+                {
+                  "q": "sum:cilium.forward_bytes.count{direction:ingress,kube_cluster_name:$cluster,host:$node}.as_count()",
+                  "display_type": "area",
+                  "style": { "palette": "cool", "line_type": "solid" }
+                },
+                {
+                  "q": "sum:cilium.forward_bytes.count{direction:egress,kube_cluster_name:$cluster,host:$node}.as_count()",
+                  "display_type": "area",
+                  "style": { "palette": "warm", "line_type": "solid" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Forwarded Packets (ingress vs egress)",
+              "requests": [
+                {
+                  "q": "sum:cilium.forward_count.count{direction:ingress,kube_cluster_name:$cluster,host:$node}.as_count()",
+                  "display_type": "line"
+                },
+                {
+                  "q": "sum:cilium.forward_count.count{direction:egress,kube_cluster_name:$cluster,host:$node}.as_count()",
+                  "display_type": "line"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+
+    {
+      "definition": {
+        "type": "group",
+        "title": "Hubble Flow Visibility",
+        "layout_type": "ordered",
+        "widgets": [
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Flow Verdicts (forwarded / dropped / error)",
+              "requests": [
+                {
+                  "q": "sum:cilium.hubble.flows_processed_total{kube_cluster_name:$cluster} by {verdict}.as_count()",
+                  "display_type": "area",
+                  "style": { "palette": "dog_classic" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Flows to World (External) with Anomaly Band",
+              "requests": [
+                {
+                  "q": "anomalies(sum:cilium.hubble.flows_to_world_total{kube_cluster_name:$cluster}.as_rate(), 'robust', 2)",
+                  "display_type": "line",
+                  "style": { "palette": "orange" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Policy Verdicts: Forwarded vs Dropped",
+              "requests": [
+                {
+                  "q": "sum:cilium.hubble.policy_verdicts_total{kube_cluster_name:$cluster,verdict:forwarded}.as_count()",
+                  "display_type": "area",
+                  "style": { "palette": "green" }
+                },
+                {
+                  "q": "sum:cilium.hubble.policy_verdicts_total{kube_cluster_name:$cluster,verdict:dropped}.as_count()",
+                  "display_type": "area",
+                  "style": { "palette": "red" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Flows by Namespace (top 10)",
+              "requests": [
+                {
+                  "q": "top(sum:cilium.hubble.flows_processed_total{kube_cluster_name:$cluster} by {source_namespace}.as_count(), 10, 'sum', 'desc')",
+                  "display_type": "bars",
+                  "style": { "palette": "dog_classic" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Hubble Lost Events by Source",
+              "requests": [
+                {
+                  "q": "sum:cilium.hubble.lost_events_total{kube_cluster_name:$cluster} by {source}.as_count()",
+                  "display_type": "bars",
+                  "style": { "palette": "warm" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "query_value",
+              "title": "Hubble Lost Events %",
+              "requests": [
+                {
+                  "formulas": [
+                    { "formula": "query1 / (query1 + query2) * 100" }
+                  ],
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "query1",
+                      "query": "sum:cilium.hubble.lost_events_total{kube_cluster_name:$cluster}.as_count()",
+                      "aggregator": "sum"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "query2",
+                      "query": "sum:cilium.hubble.flows_processed_total{kube_cluster_name:$cluster}.as_count()",
+                      "aggregator": "sum"
+                    }
+                  ],
+                  "response_format": "scalar"
+                }
+              ],
+              "precision": 2,
+              "custom_unit": "%",
+              "conditional_formats": [
+                { "comparator": "<=", "value": 0.1, "palette": "white_on_green" },
+                { "comparator": "<=", "value": 1, "palette": "white_on_yellow" },
+                { "comparator": ">", "value": 1, "palette": "white_on_red" }
+              ]
+            }
+          }
+        ]
+      }
+    },
+
+    {
+      "definition": {
+        "type": "group",
+        "title": "DNS Deep Analysis",
+        "layout_type": "ordered",
+        "widgets": [
+          {
+            "definition": {
+              "type": "query_value",
+              "title": "DNS Success Rate %",
+              "requests": [
+                {
+                  "formulas": [
+                    { "formula": "query1 / query2 * 100" }
+                  ],
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "query1",
+                      "query": "sum:cilium.hubble.dns_responses_total{rcode:NoError,kube_cluster_name:$cluster}.as_count()",
+                      "aggregator": "sum"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "query2",
+                      "query": "sum:cilium.hubble.dns_responses_total{kube_cluster_name:$cluster}.as_count()",
+                      "aggregator": "sum"
+                    }
+                  ],
+                  "response_format": "scalar"
+                }
+              ],
+              "precision": 1,
+              "custom_unit": "%",
+              "conditional_formats": [
+                { "comparator": ">=", "value": 99, "palette": "white_on_green" },
+                { "comparator": ">=", "value": 95, "palette": "white_on_yellow" },
+                { "comparator": "<", "value": 95, "palette": "white_on_red" }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "query_value",
+              "title": "NXDOMAIN Rate %",
+              "requests": [
+                {
+                  "formulas": [
+                    { "formula": "query1 / query2 * 100" }
+                  ],
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "query1",
+                      "query": "sum:cilium.hubble.dns_responses_total{rcode:Non-Existent Domain,kube_cluster_name:$cluster}.as_count()",
+                      "aggregator": "sum"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "query2",
+                      "query": "sum:cilium.hubble.dns_responses_total{kube_cluster_name:$cluster}.as_count()",
+                      "aggregator": "sum"
+                    }
+                  ],
+                  "response_format": "scalar"
+                }
+              ],
+              "precision": 1,
+              "custom_unit": "%",
+              "conditional_formats": [
+                { "comparator": "<=", "value": 5, "palette": "white_on_green" },
+                { "comparator": "<=", "value": 15, "palette": "white_on_yellow" },
+                { "comparator": ">", "value": 15, "palette": "white_on_red" }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "DNS Query Rate with Anomaly Detection",
+              "requests": [
+                {
+                  "q": "anomalies(sum:cilium.hubble.dns_queries_total{kube_cluster_name:$cluster}.as_rate(), 'agile', 3)",
+                  "display_type": "line",
+                  "style": { "palette": "cool" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "DNS Responses by rcode",
+              "requests": [
+                {
+                  "q": "sum:cilium.hubble.dns_responses_total{kube_cluster_name:$cluster} by {rcode}.as_count()",
+                  "display_type": "bars",
+                  "style": { "palette": "dog_classic" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "toplist",
+              "title": "Top NXDOMAIN Sources (by namespace)",
+              "requests": [
+                {
+                  "q": "top(sum:cilium.hubble.dns_responses_total{rcode:Non-Existent Domain,kube_cluster_name:$cluster} by {source_namespace}.as_count(), 10, 'sum', 'desc')"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+
+    {
+      "definition": {
+        "type": "group",
+        "title": "TCP",
+        "layout_type": "ordered",
+        "widgets": [
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "TCP Flags Distribution",
+              "requests": [
+                {
+                  "q": "sum:cilium.hubble.tcp_flags_total{kube_cluster_name:$cluster} by {flag}.as_count()",
+                  "display_type": "bars",
+                  "style": { "palette": "dog_classic" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "TCP RST Rate (Connection Issues Indicator)",
+              "requests": [
+                {
+                  "q": "sum:cilium.hubble.tcp_flags_total{kube_cluster_name:$cluster,flag:RST}.as_rate()",
+                  "display_type": "line",
+                  "style": { "palette": "warm" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "toplist",
+              "title": "Top 10 Destination Ports",
+              "requests": [
+                {
+                  "q": "top(sum:cilium.hubble.port_distribution_total{kube_cluster_name:$cluster} by {port}.as_count(), 10, 'sum', 'desc')"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+
+    {
+      "definition": {
+        "type": "group",
+        "title": "eBPF & Datapath Health (Critical)",
+        "layout_type": "ordered",
+        "widgets": [
+          {
+            "definition": {
+              "type": "query_value",
+              "title": "Max BPF Map Pressure",
+              "requests": [
+                {
+                  "q": "max:cilium.bpf.map_pressure{kube_cluster_name:$cluster,host:$node}",
+                  "aggregator": "last"
+                }
+              ],
+              "precision": 3,
+              "conditional_formats": [
+                { "comparator": "<=", "value": 0.75, "palette": "white_on_green" },
+                { "comparator": "<=", "value": 0.9, "palette": "white_on_yellow" },
+                { "comparator": ">", "value": 0.9, "palette": "white_on_red" }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "BPF Map Pressure by Map Name (with critical threshold)",
+              "requests": [
+                {
+                  "q": "avg:cilium.bpf.map_pressure{kube_cluster_name:$cluster,host:$node} by {map_name}",
+                  "display_type": "line"
+                }
+              ],
+              "markers": [
+                {
+                  "value": "y = 0.9",
+                  "display_type": "error dashed",
+                  "label": "CRITICAL (0.9)"
+                },
+                {
+                  "value": "y = 0.75",
+                  "display_type": "warning dashed",
+                  "label": "WARNING (0.75)"
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "BPF Map Pressure Forecast",
+              "requests": [
+                {
+                  "q": "avg:cilium.bpf.map_pressure{kube_cluster_name:$cluster,map_name:cilium_ct4_global}",
+                  "display_type": "line",
+                  "style": { "palette": "cool" }
+                },
+                {
+                  "q": "forecast(avg:cilium.bpf.map_pressure{kube_cluster_name:$cluster,map_name:cilium_ct4_global}, 'linear', 1)",
+                  "display_type": "line",
+                  "style": { "palette": "warm", "line_type": "dashed" }
+                }
+              ],
+              "markers": [
+                {
+                  "value": "y = 0.9",
+                  "display_type": "error dashed",
+                  "label": "CRITICAL"
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Conntrack Table Entries (per node)",
+              "requests": [
+                {
+                  "q": "avg:cilium.datapath.conntrack_gc.entries{kube_cluster_name:$cluster,host:$node} by {host}",
+                  "display_type": "line",
+                  "style": { "palette": "cool" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "eBPF Memory Usage (Maps + Programs)",
+              "requests": [
+                {
+                  "q": "avg:cilium.bpf.maps.virtual_memory.max.bytes{kube_cluster_name:$cluster,host:$node} by {host}",
+                  "display_type": "area",
+                  "style": { "palette": "cool" }
+                },
+                {
+                  "q": "avg:cilium.bpf.progs.virtual_memory.max.bytes{kube_cluster_name:$cluster,host:$node} by {host}",
+                  "display_type": "area",
+                  "style": { "palette": "warm" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "BPF Map Operations - Failures",
+              "requests": [
+                {
+                  "q": "sum:cilium.bpf.map_ops.count{kube_cluster_name:$cluster,outcome:fail} by {map_name,operation}.as_count()",
+                  "display_type": "bars",
+                  "style": { "palette": "warm" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Conntrack GC Duration (avg)",
+              "requests": [
+                {
+                  "formulas": [
+                    { "formula": "query1 / query2", "alias": "Avg GC Duration (s)" }
+                  ],
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "query1",
+                      "query": "avg:cilium.datapath.conntrack_gc.duration.seconds.sum{kube_cluster_name:$cluster,host:$node}",
+                      "aggregator": "avg"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "query2",
+                      "query": "avg:cilium.datapath.conntrack_gc.duration.seconds.count{kube_cluster_name:$cluster,host:$node}",
+                      "aggregator": "avg"
+                    }
+                  ],
+                  "response_format": "timeseries",
+                  "display_type": "line"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+
+    {
+      "definition": {
+        "type": "group",
+        "title": "Policy Enforcement",
+        "layout_type": "ordered",
+        "widgets": [
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Endpoint Enforcement Status",
+              "requests": [
+                {
+                  "q": "sum:cilium.policy.endpoint_enforcement_status{kube_cluster_name:$cluster} by {policy_enforcement_status}",
+                  "display_type": "bars",
+                  "style": { "palette": "dog_classic" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Policy Changes by Outcome",
+              "requests": [
+                {
+                  "q": "sum:cilium.policy.change.count{kube_cluster_name:$cluster} by {outcome}.as_count()",
+                  "display_type": "bars"
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Policy Import Errors",
+              "requests": [
+                {
+                  "q": "sum:cilium.policy.import_errors.count{kube_cluster_name:$cluster}.as_count()",
+                  "display_type": "bars",
+                  "style": { "palette": "warm" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Policy Implementation Delay (avg)",
+              "requests": [
+                {
+                  "formulas": [
+                    { "formula": "query1 / query2", "alias": "Avg Policy Delay (s)" }
+                  ],
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "query1",
+                      "query": "avg:cilium.policy.implementation_delay.seconds.sum{kube_cluster_name:$cluster}",
+                      "aggregator": "avg"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "query2",
+                      "query": "avg:cilium.policy.implementation_delay.seconds.count{kube_cluster_name:$cluster}",
+                      "aggregator": "avg"
+                    }
+                  ],
+                  "response_format": "timeseries",
+                  "display_type": "line"
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Endpoint Regeneration Rate by Outcome",
+              "requests": [
+                {
+                  "q": "sum:cilium.endpoint.regenerations.count{kube_cluster_name:$cluster,host:$node} by {outcome}.as_count()",
+                  "display_type": "bars"
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Endpoint Regeneration Failure Rate %",
+              "requests": [
+                {
+                  "formulas": [
+                    { "formula": "query1 / (query1 + query2) * 100", "alias": "Failure Rate %" }
+                  ],
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "query1",
+                      "query": "sum:cilium.endpoint.regenerations.count{kube_cluster_name:$cluster,outcome:fail}.as_count()",
+                      "aggregator": "sum"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "query2",
+                      "query": "sum:cilium.endpoint.regenerations.count{kube_cluster_name:$cluster,outcome:success}.as_count()",
+                      "aggregator": "sum"
+                    }
+                  ],
+                  "response_format": "timeseries",
+                  "display_type": "line",
+                  "style": { "palette": "warm" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Endpoints by State",
+              "requests": [
+                {
+                  "q": "sum:cilium.endpoint.state{kube_cluster_name:$cluster} by {endpoint_state}",
+                  "display_type": "area",
+                  "style": { "palette": "dog_classic" }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+
+    {
+      "definition": {
+        "type": "group",
+        "title": "Capacity Planning",
+        "layout_type": "ordered",
+        "widgets": [
+          {
+            "definition": {
+              "type": "note",
+              "content": "**Capacity Planning** tracks growth rates and projected exhaustion for identities (limit: 65535), BPF maps, endpoints, and IP addresses. Use forecasts to plan ahead.\n\n**AKS note:** IP addresses are managed by Azure VNET (delegated IPAM). cilium.ipam.capacity may not be populated.",
+              "background_color": "gray",
+              "font_size": "12",
+              "text_align": "left",
+              "show_tick": false
+            }
+          },
+          {
+            "definition": {
+              "type": "query_value",
+              "title": "Identity Count",
+              "requests": [
+                {
+                  "q": "sum:cilium.identity.count{kube_cluster_name:$cluster}",
+                  "aggregator": "last"
+                }
+              ],
+              "precision": 0,
+              "conditional_formats": [
+                { "comparator": "<=", "value": 50000, "palette": "white_on_green" },
+                { "comparator": "<=", "value": 60000, "palette": "white_on_yellow" },
+                { "comparator": ">", "value": 60000, "palette": "white_on_red" }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Identity Count Growth with Forecast",
+              "requests": [
+                {
+                  "q": "sum:cilium.identity.count{kube_cluster_name:$cluster}",
+                  "display_type": "line",
+                  "style": { "palette": "cool" }
+                },
+                {
+                  "q": "forecast(sum:cilium.identity.count{kube_cluster_name:$cluster}, 'linear', 1)",
+                  "display_type": "line",
+                  "style": { "palette": "warm", "line_type": "dashed" }
+                }
+              ],
+              "markers": [
+                {
+                  "value": "y = 65535",
+                  "display_type": "error dashed",
+                  "label": "Identity Limit"
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Endpoint Count with Forecast",
+              "requests": [
+                {
+                  "q": "sum:cilium.endpoint.count{kube_cluster_name:$cluster}",
+                  "display_type": "line",
+                  "style": { "palette": "cool" }
+                },
+                {
+                  "q": "forecast(sum:cilium.endpoint.count{kube_cluster_name:$cluster}, 'linear', 1)",
+                  "display_type": "line",
+                  "style": { "palette": "warm", "line_type": "dashed" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "IP Address Utilization",
+              "requests": [
+                {
+                  "q": "sum:cilium.ip_addresses.count{kube_cluster_name:$cluster} by {family}",
+                  "display_type": "line",
+                  "style": { "palette": "cool" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Avg Endpoint Regeneration Time",
+              "requests": [
+                {
+                  "formulas": [
+                    { "formula": "query1 / query2", "alias": "Avg Regen Time (s)" }
+                  ],
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "query1",
+                      "query": "avg:cilium.endpoint.regeneration_time_stats.seconds.sum{kube_cluster_name:$cluster}",
+                      "aggregator": "avg"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "query2",
+                      "query": "avg:cilium.endpoint.regeneration_time_stats.seconds.count{kube_cluster_name:$cluster}",
+                      "aggregator": "avg"
+                    }
+                  ],
+                  "response_format": "timeseries",
+                  "display_type": "line"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+
+    {
+      "definition": {
+        "type": "group",
+        "title": "Kubernetes Integration",
+        "layout_type": "ordered",
+        "widgets": [
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "K8s API Calls by Method",
+              "requests": [
+                {
+                  "q": "sum:cilium.k8s_client.api_calls.count{kube_cluster_name:$cluster} by {method}.as_count()",
+                  "display_type": "bars"
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "K8s API Latency (avg)",
+              "requests": [
+                {
+                  "formulas": [
+                    { "formula": "query1 / query2", "alias": "Avg API Latency (s)" }
+                  ],
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "query1",
+                      "query": "avg:cilium.k8s_client.api_latency_time.seconds.sum{kube_cluster_name:$cluster}",
+                      "aggregator": "avg"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "query2",
+                      "query": "avg:cilium.k8s_client.api_latency_time.seconds.count{kube_cluster_name:$cluster}",
+                      "aggregator": "avg"
+                    }
+                  ],
+                  "response_format": "timeseries",
+                  "display_type": "line"
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "K8s API Errors from Cilium Agent",
+              "requests": [
+                {
+                  "q": "sum:cilium.k8s_client.api_calls.count{kube_cluster_name:$cluster,response_code:5*} by {method}.as_count()",
+                  "display_type": "bars",
+                  "style": { "palette": "warm" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Workqueue Depth",
+              "requests": [
+                {
+                  "q": "avg:cilium.k8s.workqueue.depth{kube_cluster_name:$cluster} by {name}",
+                  "display_type": "line"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+
+    {
+      "definition": {
+        "type": "group",
+        "title": "Operator / Control-plane",
+        "layout_type": "ordered",
+        "widgets": [
+          {
+            "definition": {
+              "type": "note",
+              "content": "**AKS note:** IPAM is Azure-delegated. `cilium.operator.ipam.*` metrics may show limited data as Azure VNET manages pod IPs directly. LB-IPAM is not used on AKS.",
+              "background_color": "yellow",
+              "font_size": "12",
+              "text_align": "left",
+              "show_tick": false
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Operator IPAM - IPs by Type",
+              "requests": [
+                {
+                  "q": "avg:cilium.operator.ipam.ips{kube_cluster_name:$cluster} by {type}",
+                  "display_type": "line"
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Operator IPAM - Nodes by Category",
+              "requests": [
+                {
+                  "q": "avg:cilium.operator.ipam.nodes{kube_cluster_name:$cluster} by {category}",
+                  "display_type": "line"
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "CES Sync Errors",
+              "requests": [
+                {
+                  "q": "sum:cilium.operator.ces.sync_errors.count{kube_cluster_name:$cluster}.as_count()",
+                  "display_type": "bars",
+                  "style": { "palette": "warm" }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+
+    {
+      "definition": {
+        "type": "group",
+        "title": "Agent + Operator Resources",
+        "layout_type": "ordered",
+        "widgets": [
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Agent CPU by Host (with Outlier Detection)",
+              "requests": [
+                {
+                  "q": "outliers(avg:cilium.process.cpu.seconds.count{kube_cluster_name:$cluster} by {host}.as_rate(), 'DBSCAN', 3)",
+                  "display_type": "line"
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Agent Memory by Host (with Outlier Detection)",
+              "requests": [
+                {
+                  "q": "outliers(avg:cilium.process.resident_memory.bytes{kube_cluster_name:$cluster} by {host}, 'DBSCAN', 3)",
+                  "display_type": "line"
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Operator CPU",
+              "requests": [
+                {
+                  "q": "avg:cilium.operator.process.cpu.seconds.count{kube_cluster_name:$cluster}.as_rate()",
+                  "display_type": "line"
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Operator Memory",
+              "requests": [
+                {
+                  "q": "avg:cilium.operator.process.resident_memory.bytes{kube_cluster_name:$cluster}",
+                  "display_type": "line"
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "File Descriptor Utilization (open vs max)",
+              "requests": [
+                {
+                  "q": "avg:cilium.process.open_fds{kube_cluster_name:$cluster,host:$node} by {host}",
+                  "display_type": "line"
+                },
+                {
+                  "q": "avg:cilium.process.max_fds{kube_cluster_name:$cluster,host:$node} by {host}",
+                  "display_type": "line",
+                  "style": { "line_type": "dashed" }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

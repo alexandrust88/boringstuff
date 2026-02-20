@@ -1,0 +1,12 @@
+{{- if .Values.securityPolicy.enabled }}
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: {{ .Values.securityPolicy.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "envoy-gateway-config.labels" . | nindent 4 }}
+spec:
+  targetRef:
+    {{- toYaml .Values.securityPolicy.targetRef | nindent 4 }}
+{{- end }}

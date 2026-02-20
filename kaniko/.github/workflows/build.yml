@@ -3,87 +3,54 @@ name: build
 on:
   push:
     branches: [main]
+    paths: [kaniko/**]
   pull_request:
     branches: [main]
+    paths: [kaniko/**]
   workflow_dispatch:
 
 env:
   IMAGE: ${{ github.repository }}
-  REGISTRY: ghcr.io
+  CONTEXT: kaniko
 
 jobs:
   kaniko:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
     steps:
       - uses: actions/checkout@v4
-
-      - name: prepare credentials
-        run: |
-          mkdir -p /tmp/kaniko-config
-          echo '{"auths":{"ghcr.io":{"auth":"'$(echo -n "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}" | base64)'"}}}' \
-            > /tmp/kaniko-config/config.json
 
       - name: build
         run: |
           docker run --rm \
-            -v ${{ github.workspace }}:/workspace \
-            -v /tmp/kaniko-config:/kaniko/.docker:ro \
+            -v ${{ github.workspace }}:/repo \
             gcr.io/kaniko-project/executor:latest \
-            --context=/workspace \
-            --dockerfile=/workspace/Dockerfile \
-            --destination=${{ env.REGISTRY }}/${{ env.IMAGE }}:kaniko-${{ github.sha }} \
-            --cache=true \
-            ${{ github.event_name == 'pull_request' && '--no-push' || '' }}
+            --context=/repo/${{ env.CONTEXT }} \
+            --dockerfile=/repo/${{ env.CONTEXT }}/Dockerfile \
+            --no-push
 
   podman:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
     steps:
       - uses: actions/checkout@v4
 
       - name: build
-        run: podman build --tag ${{ env.REGISTRY }}/${{ env.IMAGE }}:podman-${{ github.sha }} .
-
-      - name: push
-        if: github.event_name != 'pull_request'
-        run: |
-          echo "${{ secrets.GITHUB_TOKEN }}" | \
-            podman login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
-          podman push ${{ env.REGISTRY }}/${{ env.IMAGE }}:podman-${{ github.sha }}
+        run: podman build --tag ${{ env.IMAGE }}:podman-${{ github.sha }} ${{ env.CONTEXT }}
 
   buildah:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
     steps:
       - uses: actions/checkout@v4
 
       - name: build
-        id: build
         uses: redhat-actions/buildah-build@v2
         with:
           image: ${{ env.IMAGE }}
           tags: buildah-${{ github.sha }}
-          containerfiles: ./Dockerfile
-
-      - name: login
-        if: github.event_name != 'pull_request'
-        uses: redhat-actions/podman-login@v1
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: push
-        if: github.event_name != 'pull_request'
-        uses: redhat-actions/push-to-registry@v2
-        with:
-          image: ${{ steps.build.outputs.image }}
-          tags: ${{ steps.build.outputs.tags }}
-          registry: ${{ env.REGISTRY }}
+          context: ./${{ env.CONTEXT }}
+          containerfiles: ./${{ env.CONTEXT }}/Dockerfile

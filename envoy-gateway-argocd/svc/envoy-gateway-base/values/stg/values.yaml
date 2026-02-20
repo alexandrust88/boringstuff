@@ -1,0 +1,12 @@
+# Staging environment overrides for envoy-gateway-base
+gateway-helm:
+  deployment:
+    replicas: 2
+    envoyGateway:
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          cpu: 500m
+          memory: 1Gi

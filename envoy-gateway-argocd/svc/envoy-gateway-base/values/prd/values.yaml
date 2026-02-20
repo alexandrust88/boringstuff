@@ -1,0 +1,22 @@
+# Production environment overrides for envoy-gateway-base
+gateway-helm:
+  deployment:
+    replicas: 3
+    envoyGateway:
+      resources:
+        requests:
+          cpu: 200m
+          memory: 512Mi
+        limits:
+          cpu: 1000m
+          memory: 2Gi
+    pod:
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: envoy-gateway
+  podDisruptionBudget:
+    minAvailable: 1

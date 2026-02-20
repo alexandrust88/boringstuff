@@ -1,0 +1,163 @@
+# Default values for envoy-gateway-config
+# Configures GatewayClass, Gateway instance, EnvoyProxy, and routing resources
+
+# -- GatewayClass configuration
+gatewayClass:
+  enabled: true
+  name: envoy
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+  # Reference to EnvoyProxy configuration (links GatewayClass to proxy settings)
+  parametersRef:
+    enabled: true
+    name: envoy-proxy-config
+
+# -- EnvoyProxy configuration (data plane settings)
+envoyProxy:
+  enabled: true
+  name: envoy-proxy-config
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyDeployment:
+        replicas: 2
+        strategy:
+          type: RollingUpdate
+          rollingUpdate:
+            maxUnavailable: 1
+            maxSurge: 1
+        pod:
+          annotations: {}
+          labels: {}
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+            runAsGroup: 0
+        container:
+          securityContext:
+            allowPrivilegeEscalation: true
+            privileged: true
+            readOnlyRootFilesystem: false
+            runAsNonRoot: false
+            runAsUser: 0
+            runAsGroup: 0
+            capabilities:
+              add:
+                - ALL
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+      envoyService:
+        type: LoadBalancer
+        externalTrafficPolicy: Local
+        annotations: {}
+        # Cloud-specific annotations per environment:
+        # Azure:
+        #   service.beta.kubernetes.io/azure-load-balancer-internal: "false"
+        # AWS:
+        #   service.beta.kubernetes.io/aws-load-balancer-type: nlb
+        #   service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+      envoyHpa:
+        minReplicas: 2
+        maxReplicas: 10
+        metrics:
+          - type: Resource
+            resource:
+              name: cpu
+              target:
+                type: Utilization
+                averageUtilization: 80
+  logging:
+    level:
+      default: warn
+  telemetry:
+    accessLog:
+      settings:
+        - format:
+            type: JSON
+            json:
+              start_time: "%START_TIME%"
+              method: "%REQ(:METHOD)%"
+              path: "%REQ(X-ENVOY-ORIGINAL-PATH?:PATH)%"
+              protocol: "%PROTOCOL%"
+              response_code: "%RESPONSE_CODE%"
+              response_flags: "%RESPONSE_FLAGS%"
+              bytes_received: "%BYTES_RECEIVED%"
+              bytes_sent: "%BYTES_SENT%"
+              duration: "%DURATION%"
+              upstream_service_time: "%RESP(X-ENVOY-UPSTREAM-SERVICE-TIME)%"
+              x_forwarded_for: "%REQ(X-FORWARDED-FOR)%"
+              user_agent: "%REQ(USER-AGENT)%"
+              request_id: "%REQ(X-REQUEST-ID)%"
+              authority: "%REQ(:AUTHORITY)%"
+              upstream_host: "%UPSTREAM_HOST%"
+              upstream_cluster: "%UPSTREAM_CLUSTER%"
+    metrics:
+      prometheus: {}
+
+# -- Gateway instance configuration
+gateway:
+  enabled: true
+  name: envoy-gateway
+  gatewayClassName: envoy
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces:
+          from: All
+    - name: https
+      protocol: HTTPS
+      port: 443
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            name: gateway-tls
+      allowedRoutes:
+        namespaces:
+          from: All
+
+# -- HTTPRoute for HTTP-to-HTTPS redirect
+httpRedirect:
+  enabled: true
+  name: http-redirect
+
+# -- Extra HTTPRoutes (define per environment)
+httpRoutes: []
+  # - name: argocd-route
+  #   parentRefs:
+  #     - name: envoy-gateway
+  #       sectionName: https
+  #   hostnames:
+  #     - argocd.example.com
+  #   rules:
+  #     - backendRefs:
+  #         - name: argocd-server
+  #           namespace: argocd
+  #           port: 443
+
+# -- ClientTrafficPolicy
+clientTrafficPolicy:
+  enabled: false
+  name: default-client-policy
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: envoy-gateway
+  # clientIPDetection:
+  #   xForwardedFor:
+  #     numTrustedHops: 1
+
+# -- SecurityPolicy
+securityPolicy:
+  enabled: false
+  name: default-security-policy
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: envoy-gateway

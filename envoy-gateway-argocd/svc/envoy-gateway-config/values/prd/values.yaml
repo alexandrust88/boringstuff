@@ -1,0 +1,61 @@
+# Production environment overrides for envoy-gateway-config
+
+envoyProxy:
+  provider:
+    kubernetes:
+      envoyDeployment:
+        replicas: 3
+        container:
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: 2000m
+              memory: 2Gi
+      envoyService:
+        type: LoadBalancer
+        externalTrafficPolicy: Local
+        annotations: {}
+        # Add cloud-specific annotations here per cluster
+      envoyHpa:
+        minReplicas: 3
+        maxReplicas: 10
+        metrics:
+          - type: Resource
+            resource:
+              name: cpu
+              target:
+                type: Utilization
+                averageUtilization: 75
+  logging:
+    level:
+      default: warn
+
+gateway:
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces:
+          from: All
+    - name: https
+      protocol: HTTPS
+      port: 443
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            name: gateway-tls
+      allowedRoutes:
+        namespaces:
+          from: All
+
+clientTrafficPolicy:
+  enabled: true
+  name: default-client-policy
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: envoy-gateway
