@@ -248,7 +248,7 @@
                   "compare_to": "week_before",
                   "order_by": "change",
                   "order_dir": "desc",
-                  "increase_is_good": false
+                  "increase_good": false
                 }
               ]
             }
