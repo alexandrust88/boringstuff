@@ -27,17 +27,35 @@
     {
       "name": "All Clusters",
       "template_variables": [
-        { "name": "cluster", "value": "*" },
-        { "name": "node", "value": "*" },
-        { "name": "src_ns", "value": "*" }
+        {
+          "name": "cluster",
+          "value": "*"
+        },
+        {
+          "name": "node",
+          "value": "*"
+        },
+        {
+          "name": "src_ns",
+          "value": "*"
+        }
       ]
     },
     {
       "name": "Production Only",
       "template_variables": [
-        { "name": "cluster", "value": "prod-*" },
-        { "name": "node", "value": "*" },
-        { "name": "src_ns", "value": "*" }
+        {
+          "name": "cluster",
+          "value": "prod-*"
+        },
+        {
+          "name": "node",
+          "value": "*"
+        },
+        {
+          "name": "src_ns",
+          "value": "*"
+        }
       ]
     }
   ],
@@ -45,14 +63,13 @@
     {
       "definition": {
         "type": "note",
-        "content": "## Cilium Deep Insights Dashboard\n\nThis dashboard goes beyond the default Cilium integration page. Set **$cluster** and optionally **$node** / **$src_ns** at the top.\n\n**Metric naming:** OpenMetrics V2. Agent metrics: `cilium.<name>.count`. Hubble metrics (openmetrics check with `namespace:cilium.hubble` + `raw_metric_prefix:hubble_`): `cilium.hubble.<name>.count`. If widgets show 'No data', verify helm values set `raw_metric_prefix: hubble_` on the hubble check.\n\n**Sections:** Security Posture → Agent/Operator Health → Drops & Network → Hubble Flows → DNS → TCP → eBPF Health → Policy → Capacity Planning → Kubernetes → Operator → Resources → Node Health (AKS)\n\n**AKS note:** No Envoy L7 proxy, no hubble relay (embedded in agent), no clustermesh. IPAM is Azure-delegated.\n\n**DNS rcode note:** Tag values depend on Cilium version. Verify with: `kubectl exec -n kube-system ds/cilium -- curl -s localhost:9965/metrics | grep dns_responses`",
+        "content": "## Cilium Deep Insights Dashboard\n\nThis dashboard goes beyond the default Cilium integration page. Set **$cluster** and optionally **$node** / **$src_ns** at the top.\n\n**Metric naming:** OpenMetrics V2. Agent metrics: `cilium.<name>.count`. Hubble metrics (openmetrics check with `namespace:cilium.hubble` + `raw_metric_prefix:hubble_`): `cilium.hubble.<name>.count`. If widgets show 'No data', verify helm values set `raw_metric_prefix: hubble_` on the hubble check.\n\n**Sections:** Security Posture \u2192 Agent/Operator Health \u2192 Drops & Network \u2192 Hubble Flows \u2192 DNS \u2192 TCP \u2192 eBPF Health \u2192 Policy \u2192 Capacity Planning \u2192 Kubernetes \u2192 Operator \u2192 Resources \u2192 Node Health (AKS)\n\n**AKS note:** No Envoy L7 proxy, no hubble relay (embedded in agent), no clustermesh. IPAM is Azure-delegated.\n\n**DNS rcode note:** Tag values depend on Cilium version. Verify with: `kubectl exec -n kube-system ds/cilium -- curl -s localhost:9965/metrics | grep dns_responses`",
         "background_color": "vivid_blue",
         "font_size": "14",
         "text_align": "left",
         "show_tick": false
       }
     },
-
     {
       "definition": {
         "type": "group",
@@ -78,11 +95,26 @@
                   "formulas": [
                     {
                       "formula": "(query1 - query2) / query1 * 100",
-                      "limit": { "count": 1, "order": "desc" },
+                      "limit": {
+                        "count": 1,
+                        "order": "desc"
+                      },
                       "conditional_formats": [
-                        { "comparator": ">=", "value": 90, "palette": "white_on_green" },
-                        { "comparator": ">=", "value": 70, "palette": "white_on_yellow" },
-                        { "comparator": "<", "value": 70, "palette": "white_on_red" }
+                        {
+                          "comparator": ">=",
+                          "value": 90,
+                          "palette": "white_on_green"
+                        },
+                        {
+                          "comparator": ">=",
+                          "value": 70,
+                          "palette": "white_on_yellow"
+                        },
+                        {
+                          "comparator": "<",
+                          "value": 70,
+                          "palette": "white_on_red"
+                        }
                       ]
                     }
                   ],
@@ -118,9 +150,21 @@
                     {
                       "formula": "query1 / (query1 + query2) * 100",
                       "conditional_formats": [
-                        { "comparator": "<=", "value": 0.1, "palette": "white_on_green" },
-                        { "comparator": "<=", "value": 1, "palette": "white_on_yellow" },
-                        { "comparator": ">", "value": 1, "palette": "white_on_red" }
+                        {
+                          "comparator": "<=",
+                          "value": 0.1,
+                          "palette": "white_on_green"
+                        },
+                        {
+                          "comparator": "<=",
+                          "value": 1,
+                          "palette": "white_on_yellow"
+                        },
+                        {
+                          "comparator": ">",
+                          "value": 1,
+                          "palette": "white_on_red"
+                        }
                       ]
                     }
                   ],
@@ -153,15 +197,27 @@
               "requests": [
                 {
                   "q": "sum:cilium.hubble.policy_verdicts.count{verdict:dropped,kube_cluster_name:$cluster,source_namespace:$src_ns}.as_count()",
-                  "aggregator": "sum"
+                  "aggregator": "sum",
+                  "conditional_formats": [
+                    {
+                      "comparator": "<=",
+                      "value": 0,
+                      "palette": "white_on_green"
+                    },
+                    {
+                      "comparator": "<=",
+                      "value": 50,
+                      "palette": "white_on_yellow"
+                    },
+                    {
+                      "comparator": ">",
+                      "value": 50,
+                      "palette": "white_on_red"
+                    }
+                  ]
                 }
               ],
-              "precision": 0,
-              "conditional_formats": [
-                { "comparator": "<=", "value": 0, "palette": "white_on_green" },
-                { "comparator": "<=", "value": 50, "palette": "white_on_yellow" },
-                { "comparator": ">", "value": 50, "palette": "white_on_red" }
-              ]
+              "precision": 0
             }
           },
           {
@@ -172,7 +228,11 @@
                 {
                   "q": "anomalies(sum:cilium.hubble.policy_verdicts.count{verdict:dropped,kube_cluster_name:$cluster,source_namespace:$src_ns}.as_count(), 'agile', 3)",
                   "display_type": "line",
-                  "style": { "palette": "warm", "line_type": "solid", "line_width": "normal" }
+                  "style": {
+                    "palette": "warm",
+                    "line_type": "solid",
+                    "line_width": "normal"
+                  }
                 }
               ]
             }
@@ -210,7 +270,11 @@
               "title": "Drop Reasons Distribution",
               "requests": [
                 {
-                  "formulas": [{ "formula": "query1" }],
+                  "formulas": [
+                    {
+                      "formula": "query1"
+                    }
+                  ],
                   "queries": [
                     {
                       "data_source": "metrics",
@@ -227,7 +291,6 @@
         ]
       }
     },
-
     {
       "definition": {
         "type": "group",
@@ -240,8 +303,12 @@
               "title": "Cilium Agent Check Status",
               "check": "cilium.openmetrics.health",
               "grouping": "cluster",
-              "group_by": ["kube_cluster_name"],
-              "tags": ["kube_cluster_name:$cluster"]
+              "group_by": [
+                "kube_cluster_name"
+              ],
+              "tags": [
+                "kube_cluster_name:$cluster"
+              ]
             }
           },
           {
@@ -251,14 +318,22 @@
               "requests": [
                 {
                   "q": "max:cilium.controllers.failing.count{kube_cluster_name:$cluster,host:$node}",
-                  "aggregator": "last"
+                  "aggregator": "last",
+                  "conditional_formats": [
+                    {
+                      "comparator": "<=",
+                      "value": 0,
+                      "palette": "white_on_green"
+                    },
+                    {
+                      "comparator": ">",
+                      "value": 0,
+                      "palette": "white_on_red"
+                    }
+                  ]
                 }
               ],
-              "precision": 0,
-              "conditional_formats": [
-                { "comparator": "<=", "value": 0, "palette": "white_on_green" },
-                { "comparator": ">", "value": 0, "palette": "white_on_red" }
-              ]
+              "precision": 0
             }
           },
           {
@@ -268,14 +343,22 @@
               "requests": [
                 {
                   "q": "max:cilium.unreachable.nodes{kube_cluster_name:$cluster,host:$node}",
-                  "aggregator": "last"
+                  "aggregator": "last",
+                  "conditional_formats": [
+                    {
+                      "comparator": "<=",
+                      "value": 0,
+                      "palette": "white_on_green"
+                    },
+                    {
+                      "comparator": ">",
+                      "value": 0,
+                      "palette": "white_on_red"
+                    }
+                  ]
                 }
               ],
-              "precision": 0,
-              "conditional_formats": [
-                { "comparator": "<=", "value": 0, "palette": "white_on_green" },
-                { "comparator": ">", "value": 0, "palette": "white_on_red" }
-              ]
+              "precision": 0
             }
           },
           {
@@ -326,7 +409,9 @@
                 {
                   "q": "max:cilium.unreachable.nodes{kube_cluster_name:$cluster} by {host}",
                   "display_type": "bars",
-                  "style": { "palette": "warm" }
+                  "style": {
+                    "palette": "warm"
+                  }
                 }
               ]
             }
@@ -363,7 +448,9 @@
                 {
                   "q": "sum:cilium.controllers.runs.count{kube_cluster_name:$cluster,host:$node} by {status}.as_count()",
                   "display_type": "bars",
-                  "style": { "palette": "dog_classic" }
+                  "style": {
+                    "palette": "dog_classic"
+                  }
                 }
               ]
             }
@@ -371,7 +458,6 @@
         ]
       }
     },
-
     {
       "definition": {
         "type": "group",
@@ -386,7 +472,9 @@
                 {
                   "q": "anomalies(sum:cilium.drop_count.count{kube_cluster_name:$cluster,host:$node}.as_rate(), 'agile', 3)",
                   "display_type": "line",
-                  "style": { "palette": "warm" }
+                  "style": {
+                    "palette": "warm"
+                  }
                 }
               ]
             }
@@ -399,7 +487,9 @@
                 {
                   "q": "sum:cilium.drop_count.count{kube_cluster_name:$cluster,host:$node} by {reason}.as_rate()",
                   "display_type": "bars",
-                  "style": { "palette": "warm" }
+                  "style": {
+                    "palette": "warm"
+                  }
                 }
               ]
             }
@@ -423,12 +513,16 @@
                 {
                   "q": "sum:cilium.drop_count.count{kube_cluster_name:$cluster,host:$node,direction:ingress}.as_rate()",
                   "display_type": "area",
-                  "style": { "palette": "cool" }
+                  "style": {
+                    "palette": "cool"
+                  }
                 },
                 {
                   "q": "sum:cilium.drop_count.count{kube_cluster_name:$cluster,host:$node,direction:egress}.as_rate()",
                   "display_type": "area",
-                  "style": { "palette": "warm" }
+                  "style": {
+                    "palette": "warm"
+                  }
                 }
               ]
             }
@@ -441,12 +535,18 @@
                 {
                   "q": "sum:cilium.forward_bytes.count{direction:ingress,kube_cluster_name:$cluster,host:$node}.as_count()",
                   "display_type": "area",
-                  "style": { "palette": "cool", "line_type": "solid" }
+                  "style": {
+                    "palette": "cool",
+                    "line_type": "solid"
+                  }
                 },
                 {
                   "q": "sum:cilium.forward_bytes.count{direction:egress,kube_cluster_name:$cluster,host:$node}.as_count()",
                   "display_type": "area",
-                  "style": { "palette": "warm", "line_type": "solid" }
+                  "style": {
+                    "palette": "warm",
+                    "line_type": "solid"
+                  }
                 }
               ]
             }
@@ -470,7 +570,6 @@
         ]
       }
     },
-
     {
       "definition": {
         "type": "group",
@@ -485,7 +584,9 @@
                 {
                   "q": "sum:cilium.hubble.flows_processed.count{kube_cluster_name:$cluster,source_namespace:$src_ns} by {verdict}.as_count()",
                   "display_type": "area",
-                  "style": { "palette": "dog_classic" }
+                  "style": {
+                    "palette": "dog_classic"
+                  }
                 }
               ]
             }
@@ -498,7 +599,9 @@
                 {
                   "q": "anomalies(sum:cilium.hubble.flows_to_world.count{kube_cluster_name:$cluster}.as_rate(), 'robust', 2)",
                   "display_type": "line",
-                  "style": { "palette": "orange" }
+                  "style": {
+                    "palette": "orange"
+                  }
                 }
               ]
             }
@@ -511,12 +614,16 @@
                 {
                   "q": "sum:cilium.hubble.policy_verdicts.count{kube_cluster_name:$cluster,verdict:forwarded,source_namespace:$src_ns}.as_count()",
                   "display_type": "area",
-                  "style": { "palette": "green" }
+                  "style": {
+                    "palette": "green"
+                  }
                 },
                 {
                   "q": "sum:cilium.hubble.policy_verdicts.count{kube_cluster_name:$cluster,verdict:dropped,source_namespace:$src_ns}.as_count()",
                   "display_type": "area",
-                  "style": { "palette": "red" }
+                  "style": {
+                    "palette": "red"
+                  }
                 }
               ]
             }
@@ -529,7 +636,9 @@
                 {
                   "q": "top(sum:cilium.hubble.flows_processed.count{kube_cluster_name:$cluster} by {source_namespace}.as_count(), 10, 'sum', 'desc')",
                   "display_type": "bars",
-                  "style": { "palette": "dog_classic" }
+                  "style": {
+                    "palette": "dog_classic"
+                  }
                 }
               ]
             }
@@ -542,7 +651,9 @@
                 {
                   "q": "sum:cilium.hubble.lost_events.count{kube_cluster_name:$cluster} by {source}.as_count()",
                   "display_type": "bars",
-                  "style": { "palette": "warm" }
+                  "style": {
+                    "palette": "warm"
+                  }
                 }
               ]
             }
@@ -557,9 +668,21 @@
                     {
                       "formula": "query1 / (query1 + query2) * 100",
                       "conditional_formats": [
-                        { "comparator": "<=", "value": 0.1, "palette": "white_on_green" },
-                        { "comparator": "<=", "value": 1, "palette": "white_on_yellow" },
-                        { "comparator": ">", "value": 1, "palette": "white_on_red" }
+                        {
+                          "comparator": "<=",
+                          "value": 0.1,
+                          "palette": "white_on_green"
+                        },
+                        {
+                          "comparator": "<=",
+                          "value": 1,
+                          "palette": "white_on_yellow"
+                        },
+                        {
+                          "comparator": ">",
+                          "value": 1,
+                          "palette": "white_on_red"
+                        }
                       ]
                     }
                   ],
@@ -587,7 +710,6 @@
         ]
       }
     },
-
     {
       "definition": {
         "type": "group",
@@ -604,9 +726,21 @@
                     {
                       "formula": "query1 / query2 * 100",
                       "conditional_formats": [
-                        { "comparator": ">=", "value": 99, "palette": "white_on_green" },
-                        { "comparator": ">=", "value": 95, "palette": "white_on_yellow" },
-                        { "comparator": "<", "value": 95, "palette": "white_on_red" }
+                        {
+                          "comparator": ">=",
+                          "value": 99,
+                          "palette": "white_on_green"
+                        },
+                        {
+                          "comparator": ">=",
+                          "value": 95,
+                          "palette": "white_on_yellow"
+                        },
+                        {
+                          "comparator": "<",
+                          "value": 95,
+                          "palette": "white_on_red"
+                        }
                       ]
                     }
                   ],
@@ -641,9 +775,21 @@
                     {
                       "formula": "query1 / query2 * 100",
                       "conditional_formats": [
-                        { "comparator": "<=", "value": 5, "palette": "white_on_green" },
-                        { "comparator": "<=", "value": 15, "palette": "white_on_yellow" },
-                        { "comparator": ">", "value": 15, "palette": "white_on_red" }
+                        {
+                          "comparator": "<=",
+                          "value": 5,
+                          "palette": "white_on_green"
+                        },
+                        {
+                          "comparator": "<=",
+                          "value": 15,
+                          "palette": "white_on_yellow"
+                        },
+                        {
+                          "comparator": ">",
+                          "value": 15,
+                          "palette": "white_on_red"
+                        }
                       ]
                     }
                   ],
@@ -676,7 +822,9 @@
                 {
                   "q": "anomalies(sum:cilium.hubble.dns_queries.count{kube_cluster_name:$cluster,source_namespace:$src_ns}.as_rate(), 'agile', 3)",
                   "display_type": "line",
-                  "style": { "palette": "cool" }
+                  "style": {
+                    "palette": "cool"
+                  }
                 }
               ]
             }
@@ -689,7 +837,9 @@
                 {
                   "q": "sum:cilium.hubble.dns_responses.count{kube_cluster_name:$cluster} by {rcode}.as_count()",
                   "display_type": "bars",
-                  "style": { "palette": "dog_classic" }
+                  "style": {
+                    "palette": "dog_classic"
+                  }
                 }
               ]
             }
@@ -708,7 +858,6 @@
         ]
       }
     },
-
     {
       "definition": {
         "type": "group",
@@ -723,7 +872,9 @@
                 {
                   "q": "sum:cilium.hubble.tcp_flags.count{kube_cluster_name:$cluster} by {flag}.as_count()",
                   "display_type": "bars",
-                  "style": { "palette": "dog_classic" }
+                  "style": {
+                    "palette": "dog_classic"
+                  }
                 }
               ]
             }
@@ -736,7 +887,9 @@
                 {
                   "q": "sum:cilium.hubble.tcp_flags.count{kube_cluster_name:$cluster,flag:RST}.as_rate()",
                   "display_type": "line",
-                  "style": { "palette": "warm" }
+                  "style": {
+                    "palette": "warm"
+                  }
                 }
               ]
             }
@@ -755,7 +908,6 @@
         ]
       }
     },
-
     {
       "definition": {
         "type": "group",
@@ -769,15 +921,27 @@
               "requests": [
                 {
                   "q": "max:cilium.bpf.map_pressure{kube_cluster_name:$cluster,host:$node}",
-                  "aggregator": "last"
+                  "aggregator": "last",
+                  "conditional_formats": [
+                    {
+                      "comparator": "<=",
+                      "value": 0.75,
+                      "palette": "white_on_green"
+                    },
+                    {
+                      "comparator": "<=",
+                      "value": 0.9,
+                      "palette": "white_on_yellow"
+                    },
+                    {
+                      "comparator": ">",
+                      "value": 0.9,
+                      "palette": "white_on_red"
+                    }
+                  ]
                 }
               ],
-              "precision": 3,
-              "conditional_formats": [
-                { "comparator": "<=", "value": 0.75, "palette": "white_on_green" },
-                { "comparator": "<=", "value": 0.9, "palette": "white_on_yellow" },
-                { "comparator": ">", "value": 0.9, "palette": "white_on_red" }
-              ]
+              "precision": 3
             }
           },
           {
@@ -812,12 +976,17 @@
                 {
                   "q": "avg:cilium.bpf.map_pressure{kube_cluster_name:$cluster,map_name:cilium_ct4_global}",
                   "display_type": "line",
-                  "style": { "palette": "cool" }
+                  "style": {
+                    "palette": "cool"
+                  }
                 },
                 {
                   "q": "forecast(avg:cilium.bpf.map_pressure{kube_cluster_name:$cluster,map_name:cilium_ct4_global}, 'linear', 3)",
                   "display_type": "line",
-                  "style": { "palette": "warm", "line_type": "dashed" }
+                  "style": {
+                    "palette": "warm",
+                    "line_type": "dashed"
+                  }
                 }
               ],
               "markers": [
@@ -837,7 +1006,9 @@
                 {
                   "q": "avg:cilium.datapath.conntrack_gc.entries{kube_cluster_name:$cluster,host:$node} by {host}",
                   "display_type": "line",
-                  "style": { "palette": "cool" }
+                  "style": {
+                    "palette": "cool"
+                  }
                 }
               ]
             }
@@ -850,12 +1021,16 @@
                 {
                   "q": "avg:cilium.bpf.maps.virtual_memory.max.bytes{kube_cluster_name:$cluster,host:$node} by {host}",
                   "display_type": "area",
-                  "style": { "palette": "cool" }
+                  "style": {
+                    "palette": "cool"
+                  }
                 },
                 {
                   "q": "avg:cilium.bpf.progs.virtual_memory.max.bytes{kube_cluster_name:$cluster,host:$node} by {host}",
                   "display_type": "area",
-                  "style": { "palette": "warm" }
+                  "style": {
+                    "palette": "warm"
+                  }
                 }
               ]
             }
@@ -868,7 +1043,9 @@
                 {
                   "q": "sum:cilium.bpf.map_ops.count{kube_cluster_name:$cluster,outcome:fail} by {map_name,operation}.as_count()",
                   "display_type": "bars",
-                  "style": { "palette": "warm" }
+                  "style": {
+                    "palette": "warm"
+                  }
                 }
               ]
             }
@@ -880,7 +1057,10 @@
               "requests": [
                 {
                   "formulas": [
-                    { "formula": "query1 / query2", "alias": "Avg GC Duration (s)" }
+                    {
+                      "formula": "query1 / query2",
+                      "alias": "Avg GC Duration (s)"
+                    }
                   ],
                   "queries": [
                     {
@@ -905,7 +1085,6 @@
         ]
       }
     },
-
     {
       "definition": {
         "type": "group",
@@ -920,7 +1099,9 @@
                 {
                   "q": "sum:cilium.policy.endpoint_enforcement_status{kube_cluster_name:$cluster} by {policy_enforcement_status}",
                   "display_type": "bars",
-                  "style": { "palette": "dog_classic" }
+                  "style": {
+                    "palette": "dog_classic"
+                  }
                 }
               ]
             }
@@ -945,7 +1126,9 @@
                 {
                   "q": "sum:cilium.policy.import_errors.count{kube_cluster_name:$cluster}.as_count()",
                   "display_type": "bars",
-                  "style": { "palette": "warm" }
+                  "style": {
+                    "palette": "warm"
+                  }
                 }
               ]
             }
@@ -957,7 +1140,10 @@
               "requests": [
                 {
                   "formulas": [
-                    { "formula": "query1 / query2", "alias": "Avg Policy Delay (s)" }
+                    {
+                      "formula": "query1 / query2",
+                      "alias": "Avg Policy Delay (s)"
+                    }
                   ],
                   "queries": [
                     {
@@ -998,7 +1184,10 @@
               "requests": [
                 {
                   "formulas": [
-                    { "formula": "query1 / (query1 + query2) * 100", "alias": "Failure Rate %" }
+                    {
+                      "formula": "query1 / (query1 + query2) * 100",
+                      "alias": "Failure Rate %"
+                    }
                   ],
                   "queries": [
                     {
@@ -1016,7 +1205,9 @@
                   ],
                   "response_format": "timeseries",
                   "display_type": "line",
-                  "style": { "palette": "warm" }
+                  "style": {
+                    "palette": "warm"
+                  }
                 }
               ]
             }
@@ -1029,7 +1220,9 @@
                 {
                   "q": "sum:cilium.endpoint.state{kube_cluster_name:$cluster} by {endpoint_state}",
                   "display_type": "area",
-                  "style": { "palette": "dog_classic" }
+                  "style": {
+                    "palette": "dog_classic"
+                  }
                 }
               ]
             }
@@ -1037,7 +1230,6 @@
         ]
       }
     },
-
     {
       "definition": {
         "type": "group",
@@ -1061,15 +1253,27 @@
               "requests": [
                 {
                   "q": "sum:cilium.identity.count{kube_cluster_name:$cluster}",
-                  "aggregator": "last"
+                  "aggregator": "last",
+                  "conditional_formats": [
+                    {
+                      "comparator": "<=",
+                      "value": 50000,
+                      "palette": "white_on_green"
+                    },
+                    {
+                      "comparator": "<=",
+                      "value": 60000,
+                      "palette": "white_on_yellow"
+                    },
+                    {
+                      "comparator": ">",
+                      "value": 60000,
+                      "palette": "white_on_red"
+                    }
+                  ]
                 }
               ],
-              "precision": 0,
-              "conditional_formats": [
-                { "comparator": "<=", "value": 50000, "palette": "white_on_green" },
-                { "comparator": "<=", "value": 60000, "palette": "white_on_yellow" },
-                { "comparator": ">", "value": 60000, "palette": "white_on_red" }
-              ]
+              "precision": 0
             }
           },
           {
@@ -1080,12 +1284,17 @@
                 {
                   "q": "sum:cilium.identity.count{kube_cluster_name:$cluster}",
                   "display_type": "line",
-                  "style": { "palette": "cool" }
+                  "style": {
+                    "palette": "cool"
+                  }
                 },
                 {
                   "q": "forecast(sum:cilium.identity.count{kube_cluster_name:$cluster}, 'linear', 3)",
                   "display_type": "line",
-                  "style": { "palette": "warm", "line_type": "dashed" }
+                  "style": {
+                    "palette": "warm",
+                    "line_type": "dashed"
+                  }
                 }
               ],
               "markers": [
@@ -1105,12 +1314,17 @@
                 {
                   "q": "sum:cilium.endpoint.count{kube_cluster_name:$cluster}",
                   "display_type": "line",
-                  "style": { "palette": "cool" }
+                  "style": {
+                    "palette": "cool"
+                  }
                 },
                 {
                   "q": "forecast(sum:cilium.endpoint.count{kube_cluster_name:$cluster}, 'linear', 3)",
                   "display_type": "line",
-                  "style": { "palette": "warm", "line_type": "dashed" }
+                  "style": {
+                    "palette": "warm",
+                    "line_type": "dashed"
+                  }
                 }
               ]
             }
@@ -1123,7 +1337,9 @@
                 {
                   "q": "sum:cilium.ip_addresses.count{kube_cluster_name:$cluster} by {family}",
                   "display_type": "line",
-                  "style": { "palette": "cool" }
+                  "style": {
+                    "palette": "cool"
+                  }
                 }
               ]
             }
@@ -1135,7 +1351,10 @@
               "requests": [
                 {
                   "formulas": [
-                    { "formula": "query1 / query2", "alias": "Avg Regen Time (s)" }
+                    {
+                      "formula": "query1 / query2",
+                      "alias": "Avg Regen Time (s)"
+                    }
                   ],
                   "queries": [
                     {
@@ -1160,7 +1379,6 @@
         ]
       }
     },
-
     {
       "definition": {
         "type": "group",
@@ -1186,7 +1404,10 @@
               "requests": [
                 {
                   "formulas": [
-                    { "formula": "query1 / query2", "alias": "Avg API Latency (s)" }
+                    {
+                      "formula": "query1 / query2",
+                      "alias": "Avg API Latency (s)"
+                    }
                   ],
                   "queries": [
                     {
@@ -1216,7 +1437,9 @@
                 {
                   "q": "sum:cilium.k8s_client.api_calls.count{kube_cluster_name:$cluster,response_code:5*} by {method}.as_count()",
                   "display_type": "bars",
-                  "style": { "palette": "warm" }
+                  "style": {
+                    "palette": "warm"
+                  }
                 }
               ]
             }
@@ -1236,7 +1459,6 @@
         ]
       }
     },
-
     {
       "definition": {
         "type": "group",
@@ -1285,7 +1507,9 @@
                 {
                   "q": "sum:cilium.operator.ces.sync_errors.count{kube_cluster_name:$cluster}.as_count()",
                   "display_type": "bars",
-                  "style": { "palette": "warm" }
+                  "style": {
+                    "palette": "warm"
+                  }
                 }
               ]
             }
@@ -1293,7 +1517,6 @@
         ]
       }
     },
-
     {
       "definition": {
         "type": "group",
@@ -1360,7 +1583,9 @@
                 {
                   "q": "avg:cilium.process.max_fds{kube_cluster_name:$cluster,host:$node} by {host}",
                   "display_type": "line",
-                  "style": { "line_type": "dashed" }
+                  "style": {
+                    "line_type": "dashed"
+                  }
                 }
               ]
             }
@@ -1368,7 +1593,6 @@
         ]
       }
     },
-
     {
       "definition": {
         "type": "group",
@@ -1406,14 +1630,22 @@
               "requests": [
                 {
                   "q": "sum:kubernetes_state.node.by_condition{kube_cluster_name:$cluster,condition:ready,status:true}",
-                  "aggregator": "last"
+                  "aggregator": "last",
+                  "conditional_formats": [
+                    {
+                      "comparator": ">",
+                      "value": 0,
+                      "palette": "white_on_green"
+                    },
+                    {
+                      "comparator": "<=",
+                      "value": 0,
+                      "palette": "white_on_red"
+                    }
+                  ]
                 }
               ],
-              "precision": 0,
-              "conditional_formats": [
-                { "comparator": ">", "value": 0, "palette": "white_on_green" },
-                { "comparator": "<=", "value": 0, "palette": "white_on_red" }
-              ]
+              "precision": 0
             }
           },
           {
@@ -1423,14 +1655,22 @@
               "requests": [
                 {
                   "q": "sum:kubernetes_state.node.by_condition{kube_cluster_name:$cluster,condition:ready,status:false}",
-                  "aggregator": "last"
+                  "aggregator": "last",
+                  "conditional_formats": [
+                    {
+                      "comparator": "<=",
+                      "value": 0,
+                      "palette": "white_on_green"
+                    },
+                    {
+                      "comparator": ">",
+                      "value": 0,
+                      "palette": "white_on_red"
+                    }
+                  ]
                 }
               ],
-              "precision": 0,
-              "conditional_formats": [
-                { "comparator": "<=", "value": 0, "palette": "white_on_green" },
-                { "comparator": ">", "value": 0, "palette": "white_on_red" }
-              ]
+              "precision": 0
             }
           },
           {
@@ -1440,14 +1680,22 @@
               "requests": [
                 {
                   "q": "sum:kubernetes_state.node.by_condition{kube_cluster_name:$cluster,condition:memorypressure,status:true}",
-                  "aggregator": "last"
+                  "aggregator": "last",
+                  "conditional_formats": [
+                    {
+                      "comparator": "<=",
+                      "value": 0,
+                      "palette": "white_on_green"
+                    },
+                    {
+                      "comparator": ">",
+                      "value": 0,
+                      "palette": "white_on_red"
+                    }
+                  ]
                 }
               ],
-              "precision": 0,
-              "conditional_formats": [
-                { "comparator": "<=", "value": 0, "palette": "white_on_green" },
-                { "comparator": ">", "value": 0, "palette": "white_on_red" }
-              ]
+              "precision": 0
             }
           },
           {
@@ -1457,14 +1705,22 @@
               "requests": [
                 {
                   "q": "sum:kubernetes_state.node.by_condition{kube_cluster_name:$cluster,condition:diskpressure,status:true}",
-                  "aggregator": "last"
+                  "aggregator": "last",
+                  "conditional_formats": [
+                    {
+                      "comparator": "<=",
+                      "value": 0,
+                      "palette": "white_on_green"
+                    },
+                    {
+                      "comparator": ">",
+                      "value": 0,
+                      "palette": "white_on_red"
+                    }
+                  ]
                 }
               ],
-              "precision": 0,
-              "conditional_formats": [
-                { "comparator": "<=", "value": 0, "palette": "white_on_green" },
-                { "comparator": ">", "value": 0, "palette": "white_on_red" }
-              ]
+              "precision": 0
             }
           },
           {
@@ -1474,14 +1730,22 @@
               "requests": [
                 {
                   "q": "sum:kubernetes_state.node.by_condition{kube_cluster_name:$cluster,condition:pidpressure,status:true}",
-                  "aggregator": "last"
+                  "aggregator": "last",
+                  "conditional_formats": [
+                    {
+                      "comparator": "<=",
+                      "value": 0,
+                      "palette": "white_on_green"
+                    },
+                    {
+                      "comparator": ">",
+                      "value": 0,
+                      "palette": "white_on_red"
+                    }
+                  ]
                 }
               ],
-              "precision": 0,
-              "conditional_formats": [
-                { "comparator": "<=", "value": 0, "palette": "white_on_green" },
-                { "comparator": ">", "value": 0, "palette": "white_on_red" }
-              ]
+              "precision": 0
             }
           },
           {
@@ -1491,14 +1755,22 @@
               "requests": [
                 {
                   "q": "sum:kubernetes_state.node.status{kube_cluster_name:$cluster,status:unschedulable}",
-                  "aggregator": "last"
+                  "aggregator": "last",
+                  "conditional_formats": [
+                    {
+                      "comparator": "<=",
+                      "value": 0,
+                      "palette": "white_on_green"
+                    },
+                    {
+                      "comparator": ">",
+                      "value": 0,
+                      "palette": "white_on_yellow"
+                    }
+                  ]
                 }
               ],
-              "precision": 0,
-              "conditional_formats": [
-                { "comparator": "<=", "value": 0, "palette": "white_on_green" },
-                { "comparator": ">", "value": 0, "palette": "white_on_yellow" }
-              ]
+              "precision": 0
             }
           },
           {
@@ -1511,8 +1783,12 @@
                 }
               },
               "node_type": "host",
-              "scope": ["kube_cluster_name:$cluster"],
-              "group": ["availability-zone"],
+              "scope": [
+                "kube_cluster_name:$cluster"
+              ],
+              "group": [
+                "availability-zone"
+              ],
               "no_metric_hosts": false,
               "no_group_hosts": true,
               "style": {
@@ -1529,23 +1805,41 @@
                 {
                   "q": "avg:system.cpu.user{kube_cluster_name:$cluster,host:$node} by {host}",
                   "display_type": "line",
-                  "style": { "palette": "cool" }
+                  "style": {
+                    "palette": "cool"
+                  }
                 },
                 {
                   "q": "avg:system.cpu.system{kube_cluster_name:$cluster,host:$node} by {host}",
                   "display_type": "line",
-                  "style": { "palette": "warm" }
+                  "style": {
+                    "palette": "warm"
+                  }
                 },
                 {
                   "q": "avg:system.cpu.iowait{kube_cluster_name:$cluster,host:$node} by {host}",
                   "display_type": "line",
-                  "style": { "palette": "orange", "line_type": "dashed" }
+                  "style": {
+                    "palette": "orange",
+                    "line_type": "dashed"
+                  }
                 }
               ],
-              "yaxis": { "include_zero": true, "max": "100" },
+              "yaxis": {
+                "include_zero": true,
+                "max": "100"
+              },
               "markers": [
-                { "value": "y = 80", "display_type": "warning dashed", "label": "Warning 80%" },
-                { "value": "y = 95", "display_type": "error dashed", "label": "Critical 95%" }
+                {
+                  "value": "y = 80",
+                  "display_type": "warning dashed",
+                  "label": "Warning 80%"
+                },
+                {
+                  "value": "y = 95",
+                  "display_type": "error dashed",
+                  "label": "Critical 95%"
+                }
               ]
             }
           },
@@ -1557,11 +1851,17 @@
                 {
                   "q": "avg:system.cpu.stolen{kube_cluster_name:$cluster,host:$node} by {host}",
                   "display_type": "bars",
-                  "style": { "palette": "warm" }
+                  "style": {
+                    "palette": "warm"
+                  }
                 }
               ],
               "markers": [
-                { "value": "y = 5", "display_type": "warning dashed", "label": "Steal > 5% = noisy neighbor" }
+                {
+                  "value": "y = 5",
+                  "display_type": "warning dashed",
+                  "label": "Steal > 5% = noisy neighbor"
+                }
               ]
             }
           },
@@ -1572,17 +1872,29 @@
               "requests": [
                 {
                   "q": "avg:system.mem.pct_usable{kube_cluster_name:$cluster,host:$node} * 100",
-                  "aggregator": "last"
+                  "aggregator": "last",
+                  "conditional_formats": [
+                    {
+                      "comparator": ">",
+                      "value": 20,
+                      "palette": "white_on_green"
+                    },
+                    {
+                      "comparator": ">",
+                      "value": 10,
+                      "palette": "white_on_yellow"
+                    },
+                    {
+                      "comparator": "<=",
+                      "value": 10,
+                      "palette": "white_on_red"
+                    }
+                  ]
                 }
               ],
               "precision": 1,
               "autoscale": false,
-              "custom_unit": "%",
-              "conditional_formats": [
-                { "comparator": ">", "value": 20, "palette": "white_on_green" },
-                { "comparator": ">", "value": 10, "palette": "white_on_yellow" },
-                { "comparator": "<=", "value": 10, "palette": "white_on_red" }
-              ]
+              "custom_unit": "%"
             }
           },
           {
@@ -1593,12 +1905,17 @@
                 {
                   "q": "avg:system.mem.used{kube_cluster_name:$cluster,host:$node} by {host}",
                   "display_type": "line",
-                  "style": { "palette": "cool" }
+                  "style": {
+                    "palette": "cool"
+                  }
                 },
                 {
                   "q": "avg:system.mem.total{kube_cluster_name:$cluster,host:$node} by {host}",
                   "display_type": "line",
-                  "style": { "palette": "grey", "line_type": "dashed" }
+                  "style": {
+                    "palette": "grey",
+                    "line_type": "dashed"
+                  }
                 }
               ]
             }
@@ -1611,17 +1928,25 @@
                 {
                   "q": "avg:kubernetes.memory.usage{kube_cluster_name:$cluster,host:$node} by {host}",
                   "display_type": "line",
-                  "style": { "palette": "cool" }
+                  "style": {
+                    "palette": "cool"
+                  }
                 },
                 {
                   "q": "avg:kubernetes_state.node.memory_allocatable{kube_cluster_name:$cluster,host:$node} by {host}",
                   "display_type": "line",
-                  "style": { "palette": "grey", "line_type": "dashed" }
+                  "style": {
+                    "palette": "grey",
+                    "line_type": "dashed"
+                  }
                 },
                 {
                   "q": "sum:kubernetes.memory.requests{kube_cluster_name:$cluster,host:$node} by {host}",
                   "display_type": "line",
-                  "style": { "palette": "warm", "line_type": "dotted" }
+                  "style": {
+                    "palette": "warm",
+                    "line_type": "dotted"
+                  }
                 }
               ]
             }
@@ -1634,17 +1959,25 @@
                 {
                   "q": "avg:kubernetes.cpu.usage.total{kube_cluster_name:$cluster,host:$node} by {host}",
                   "display_type": "line",
-                  "style": { "palette": "cool" }
+                  "style": {
+                    "palette": "cool"
+                  }
                 },
                 {
                   "q": "avg:kubernetes_state.node.cpu_allocatable{kube_cluster_name:$cluster,host:$node} by {host}",
                   "display_type": "line",
-                  "style": { "palette": "grey", "line_type": "dashed" }
+                  "style": {
+                    "palette": "grey",
+                    "line_type": "dashed"
+                  }
                 },
                 {
                   "q": "sum:kubernetes.cpu.requests{kube_cluster_name:$cluster,host:$node} by {host}",
                   "display_type": "line",
-                  "style": { "palette": "warm", "line_type": "dotted" }
+                  "style": {
+                    "palette": "warm",
+                    "line_type": "dotted"
+                  }
                 }
               ]
             }
@@ -1657,13 +1990,26 @@
                 {
                   "q": "avg:system.disk.in_use{kube_cluster_name:$cluster,host:$node} by {host} * 100",
                   "display_type": "line",
-                  "style": { "palette": "cool" }
+                  "style": {
+                    "palette": "cool"
+                  }
                 }
               ],
-              "yaxis": { "include_zero": true, "max": "100" },
+              "yaxis": {
+                "include_zero": true,
+                "max": "100"
+              },
               "markers": [
-                { "value": "y = 80", "display_type": "warning dashed", "label": "Warning 80%" },
-                { "value": "y = 90", "display_type": "error dashed", "label": "Critical 90%" }
+                {
+                  "value": "y = 80",
+                  "display_type": "warning dashed",
+                  "label": "Warning 80%"
+                },
+                {
+                  "value": "y = 90",
+                  "display_type": "error dashed",
+                  "label": "Critical 90%"
+                }
               ]
             }
           },
@@ -1675,11 +2021,17 @@
                 {
                   "q": "avg:system.io.util{kube_cluster_name:$cluster,host:$node} by {host}",
                   "display_type": "line",
-                  "style": { "palette": "warm" }
+                  "style": {
+                    "palette": "warm"
+                  }
                 }
               ],
               "markers": [
-                { "value": "y = 80", "display_type": "warning dashed", "label": "High I/O 80%" }
+                {
+                  "value": "y = 80",
+                  "display_type": "warning dashed",
+                  "label": "High I/O 80%"
+                }
               ]
             }
           },
@@ -1691,12 +2043,16 @@
                 {
                   "q": "avg:system.net.bytes_rcvd{kube_cluster_name:$cluster,host:$node} by {host}",
                   "display_type": "line",
-                  "style": { "palette": "cool" }
+                  "style": {
+                    "palette": "cool"
+                  }
                 },
                 {
                   "q": "avg:system.net.bytes_sent{kube_cluster_name:$cluster,host:$node} by {host}",
                   "display_type": "line",
-                  "style": { "palette": "warm" }
+                  "style": {
+                    "palette": "warm"
+                  }
                 }
               ]
             }
@@ -1709,17 +2065,23 @@
                 {
                   "q": "sum:system.net.packets_in.error{kube_cluster_name:$cluster,host:$node} by {host}",
                   "display_type": "bars",
-                  "style": { "palette": "warm" }
+                  "style": {
+                    "palette": "warm"
+                  }
                 },
                 {
                   "q": "sum:system.net.packets_out.error{kube_cluster_name:$cluster,host:$node} by {host}",
                   "display_type": "bars",
-                  "style": { "palette": "orange" }
+                  "style": {
+                    "palette": "orange"
+                  }
                 },
                 {
                   "q": "sum:system.net.packets_in.drop{kube_cluster_name:$cluster,host:$node} by {host}",
                   "display_type": "bars",
-                  "style": { "palette": "red" }
+                  "style": {
+                    "palette": "red"
+                  }
                 }
               ]
             }
@@ -1732,12 +2094,17 @@
                 {
                   "q": "avg:system.net.conntrack.count{kube_cluster_name:$cluster,host:$node} by {host}",
                   "display_type": "line",
-                  "style": { "palette": "cool" }
+                  "style": {
+                    "palette": "cool"
+                  }
                 },
                 {
                   "q": "avg:system.net.conntrack.max{kube_cluster_name:$cluster,host:$node} by {host}",
                   "display_type": "line",
-                  "style": { "palette": "grey", "line_type": "dashed" }
+                  "style": {
+                    "palette": "grey",
+                    "line_type": "dashed"
+                  }
                 }
               ]
             }
@@ -1750,22 +2117,38 @@
                 {
                   "q": "avg:system.load.norm.1{kube_cluster_name:$cluster,host:$node} by {host}",
                   "display_type": "line",
-                  "style": { "palette": "dog_classic" }
+                  "style": {
+                    "palette": "dog_classic"
+                  }
                 },
                 {
                   "q": "avg:system.load.norm.5{kube_cluster_name:$cluster,host:$node} by {host}",
                   "display_type": "line",
-                  "style": { "palette": "cool", "line_type": "dashed" }
+                  "style": {
+                    "palette": "cool",
+                    "line_type": "dashed"
+                  }
                 },
                 {
                   "q": "avg:system.load.norm.15{kube_cluster_name:$cluster,host:$node} by {host}",
                   "display_type": "line",
-                  "style": { "palette": "warm", "line_type": "dotted" }
+                  "style": {
+                    "palette": "warm",
+                    "line_type": "dotted"
+                  }
                 }
               ],
               "markers": [
-                { "value": "y = 1", "display_type": "warning dashed", "label": "Fully loaded (norm=1)" },
-                { "value": "y = 2", "display_type": "error dashed", "label": "Overloaded (norm=2)" }
+                {
+                  "value": "y = 1",
+                  "display_type": "warning dashed",
+                  "label": "Fully loaded (norm=1)"
+                },
+                {
+                  "value": "y = 2",
+                  "display_type": "error dashed",
+                  "label": "Overloaded (norm=2)"
+                }
               ]
             }
           },
@@ -1788,12 +2171,17 @@
                 {
                   "q": "avg:kubernetes.pods.running{kube_cluster_name:$cluster,host:$node} by {host}",
                   "display_type": "line",
-                  "style": { "palette": "cool" }
+                  "style": {
+                    "palette": "cool"
+                  }
                 },
                 {
                   "q": "avg:kubernetes_state.node.pods_allocatable{kube_cluster_name:$cluster,host:$node} by {host}",
                   "display_type": "line",
-                  "style": { "palette": "grey", "line_type": "dashed" }
+                  "style": {
+                    "palette": "grey",
+                    "line_type": "dashed"
+                  }
                 }
               ]
             }
@@ -1805,7 +2193,9 @@
               "requests": [
                 {
                   "formulas": [
-                    { "formula": "query1 / 86400" }
+                    {
+                      "formula": "query1 / 86400"
+                    }
                   ],
                   "queries": [
                     {
@@ -1830,15 +2220,27 @@
               "requests": [
                 {
                   "q": "sum:oom_kill.oom_process.count{kube_cluster_name:$cluster,host:$node}.as_count()",
-                  "aggregator": "sum"
+                  "aggregator": "sum",
+                  "conditional_formats": [
+                    {
+                      "comparator": "<=",
+                      "value": 0,
+                      "palette": "white_on_green"
+                    },
+                    {
+                      "comparator": "<=",
+                      "value": 5,
+                      "palette": "white_on_yellow"
+                    },
+                    {
+                      "comparator": ">",
+                      "value": 5,
+                      "palette": "white_on_red"
+                    }
+                  ]
                 }
               ],
-              "precision": 0,
-              "conditional_formats": [
-                { "comparator": "<=", "value": 0, "palette": "white_on_green" },
-                { "comparator": "<=", "value": 5, "palette": "white_on_yellow" },
-                { "comparator": ">", "value": 5, "palette": "white_on_red" }
-              ]
+              "precision": 0
             }
           },
           {
@@ -1848,16 +2250,28 @@
               "requests": [
                 {
                   "q": "max:tcp_queue.read_buffer_max_usage_pct{kube_cluster_name:$cluster,host:$node}",
-                  "aggregator": "max"
+                  "aggregator": "max",
+                  "conditional_formats": [
+                    {
+                      "comparator": "<=",
+                      "value": 50,
+                      "palette": "white_on_green"
+                    },
+                    {
+                      "comparator": "<=",
+                      "value": 80,
+                      "palette": "white_on_yellow"
+                    },
+                    {
+                      "comparator": ">",
+                      "value": 80,
+                      "palette": "white_on_red"
+                    }
+                  ]
                 }
               ],
               "precision": 1,
-              "custom_unit": "%",
-              "conditional_formats": [
-                { "comparator": "<=", "value": 50, "palette": "white_on_green" },
-                { "comparator": "<=", "value": 80, "palette": "white_on_yellow" },
-                { "comparator": ">", "value": 80, "palette": "white_on_red" }
-              ]
+              "custom_unit": "%"
             }
           }
         ]
