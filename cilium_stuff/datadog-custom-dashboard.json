@@ -748,7 +748,7 @@
                     {
                       "data_source": "metrics",
                       "name": "query1",
-                      "query": "sum:cilium.hubble.dns_responses.count{rcode:No Error,kube_cluster_name:$cluster,source_namespace:$src_ns}.as_count()",
+                      "query": "sum:cilium.hubble.dns_responses.count{rcode:noerror,kube_cluster_name:$cluster,source_namespace:$src_ns}.as_count()",
                       "aggregator": "sum"
                     },
                     {
@@ -797,7 +797,7 @@
                     {
                       "data_source": "metrics",
                       "name": "query1",
-                      "query": "sum:cilium.hubble.dns_responses.count{rcode:Non-Existent Domain,kube_cluster_name:$cluster}.as_count()",
+                      "query": "sum:cilium.hubble.dns_responses.count{rcode:nxdomain,kube_cluster_name:$cluster}.as_count()",
                       "aggregator": "sum"
                     },
                     {
@@ -850,7 +850,7 @@
               "title": "Top NXDOMAIN Sources (by namespace)",
               "requests": [
                 {
-                  "q": "top(sum:cilium.hubble.dns_responses.count{rcode:Non-Existent Domain,kube_cluster_name:$cluster} by {source_namespace}.as_count(), 10, 'sum', 'desc')"
+                  "q": "top(sum:cilium.hubble.dns_responses.count{rcode:nxdomain,kube_cluster_name:$cluster} by {source_namespace}.as_count(), 10, 'sum', 'desc')"
                 }
               ]
             }
@@ -1777,11 +1777,11 @@
             "definition": {
               "type": "hostmap",
               "title": "Node CPU Utilization Heatmap",
-              "requests": {
-                "fill": {
+              "requests": [
+                {
                   "q": "avg:system.cpu.user{kube_cluster_name:$cluster,host:$node} by {host} + avg:system.cpu.system{kube_cluster_name:$cluster,host:$node} by {host}"
                 }
-              },
+              ],
               "node_type": "host",
               "scope": [
                 "kube_cluster_name:$cluster"
