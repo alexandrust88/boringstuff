@@ -2,8 +2,7 @@
   "title": "Cilium Deep Insights (AKS / Fleet)",
   "description": "Advanced Cilium dashboard for AKS fleets. Goes beyond the default integration page with: security posture scoring, anomaly detection, capacity planning, SLO tracking, and eBPF health. Uses correct metric names from the Datadog Cilium integration (OpenMetrics v2). NOTE: AKS-managed Cilium 1.17 - no hubble relay, no envoy L7 proxy, no clustermesh.",
   "layout_type": "ordered",
-  "is_read_only": false,
-  "notify_list": [],
+  "restricted_roles": [],
   "template_variables": [
     {
       "name": "cluster",
@@ -46,7 +45,7 @@
     {
       "definition": {
         "type": "note",
-        "content": "## Cilium Deep Insights Dashboard\n\nThis dashboard goes beyond the default Cilium integration page. Set **$cluster** and optionally **$node** / **$src_ns** at the top.\n\n**Metric naming:** Uses OpenMetrics v2 naming (`cilium.drop_count.count`, `cilium.hubble.flows_processed_total`, etc). If a widget shows 'No data', verify your Cilium + Datadog agent configuration matches the metrics reference.\n\n**Sections:** Security Posture → Agent/Operator Health → Drops & Network → Hubble Flows → DNS → TCP → eBPF Health → Policy → Capacity Planning → Kubernetes → Operator → Resources\n\n**AKS note:** No Envoy L7 proxy, no hubble relay (embedded in agent), no clustermesh. IPAM is Azure-delegated.\n\n**DNS rcode note:** Tag values depend on Cilium version. Verify with: `kubectl exec -n kube-system ds/cilium -- curl -s localhost:9965/metrics | grep dns_responses`",
+        "content": "## Cilium Deep Insights Dashboard\n\nThis dashboard goes beyond the default Cilium integration page. Set **$cluster** and optionally **$node** / **$src_ns** at the top.\n\n**Metric naming:** OpenMetrics V2. Agent metrics: `cilium.<name>.count`. Hubble metrics (openmetrics check with `namespace:cilium.hubble` + `raw_metric_prefix:hubble_`): `cilium.hubble.<name>.count`. If widgets show 'No data', verify helm values set `raw_metric_prefix: hubble_` on the hubble check.\n\n**Sections:** Security Posture → Agent/Operator Health → Drops & Network → Hubble Flows → DNS → TCP → eBPF Health → Policy → Capacity Planning → Kubernetes → Operator → Resources → Node Health (AKS)\n\n**AKS note:** No Envoy L7 proxy, no hubble relay (embedded in agent), no clustermesh. IPAM is Azure-delegated.\n\n**DNS rcode note:** Tag values depend on Cilium version. Verify with: `kubectl exec -n kube-system ds/cilium -- curl -s localhost:9965/metrics | grep dns_responses`",
         "background_color": "vivid_blue",
         "font_size": "14",
         "text_align": "left",
@@ -65,7 +64,7 @@
               "type": "note",
               "content": "**Security Posture** tracks policy enforcement coverage, drop-to-forward ratios, and denial trends. A healthy cluster has >90% policy coverage, <0.1% drop ratio, and stable denial rates.",
               "background_color": "gray",
-              "font_size": "12",
+              "font_size": "14",
               "text_align": "left",
               "show_tick": false
             }
@@ -103,9 +102,9 @@
               "autoscale": false,
               "custom_unit": "%",
               "conditional_formats": [
-                { "comparator": ">", "value": 90, "palette": "white_on_green" },
-                { "comparator": ">", "value": 70, "palette": "white_on_yellow" },
-                { "comparator": "<=", "value": 70, "palette": "white_on_red" }
+                { "comparator": ">=", "value": 90, "palette": "white_on_green" },
+                { "comparator": ">=", "value": 70, "palette": "white_on_yellow" },
+                { "comparator": "<", "value": 70, "palette": "white_on_red" }
               ]
             }
           },
@@ -153,7 +152,7 @@
               "title": "Policy Denials (last timeframe)",
               "requests": [
                 {
-                  "q": "sum:cilium.hubble.policy_verdicts_total{verdict:dropped,kube_cluster_name:$cluster,source_namespace:$src_ns}.as_count()",
+                  "q": "sum:cilium.hubble.policy_verdicts.count{verdict:dropped,kube_cluster_name:$cluster,source_namespace:$src_ns}.as_count()",
                   "aggregator": "sum"
                 }
               ],
@@ -171,7 +170,7 @@
               "title": "Policy Denials with Anomaly Detection",
               "requests": [
                 {
-                  "q": "anomalies(sum:cilium.hubble.policy_verdicts_total{verdict:dropped,kube_cluster_name:$cluster,source_namespace:$src_ns}.as_count(), 'agile', 3)",
+                  "q": "anomalies(sum:cilium.hubble.policy_verdicts.count{verdict:dropped,kube_cluster_name:$cluster,source_namespace:$src_ns}.as_count(), 'agile', 3)",
                   "display_type": "line",
                   "style": { "palette": "warm", "line_type": "solid", "line_width": "normal" }
                 }
@@ -184,12 +183,12 @@
               "title": "Policy Denials - Week over Week",
               "requests": [
                 {
-                  "q": "sum:cilium.hubble.policy_verdicts_total{verdict:dropped,kube_cluster_name:$cluster,source_namespace:$src_ns}.as_count()",
+                  "q": "sum:cilium.hubble.policy_verdicts.count{verdict:dropped,kube_cluster_name:$cluster,source_namespace:$src_ns}.as_count()",
                   "change_type": "absolute",
                   "compare_to": "week_before",
                   "order_by": "change",
                   "order_dir": "desc",
-                  "increase_good": false
+                  "increase_is_good": false
                 }
               ]
             }
@@ -200,7 +199,7 @@
               "title": "Top Denied Namespaces",
               "requests": [
                 {
-                  "q": "top(sum:cilium.hubble.policy_verdicts_total{verdict:dropped,kube_cluster_name:$cluster} by {source_namespace}.as_count(), 10, 'sum', 'desc')"
+                  "q": "top(sum:cilium.hubble.policy_verdicts.count{verdict:dropped,kube_cluster_name:$cluster} by {source_namespace}.as_count(), 10, 'sum', 'desc')"
                 }
               ]
             }
@@ -220,7 +219,7 @@
                       "aggregator": "sum"
                     }
                   ],
-                  "response_format": "scalar"
+                  "response_format": "timeseries"
                 }
               ]
             }
@@ -239,7 +238,7 @@
             "definition": {
               "type": "check_status",
               "title": "Cilium Agent Check Status",
-              "check": "cilium.prometheus.health",
+              "check": "cilium.openmetrics.health",
               "grouping": "cluster",
               "group_by": ["kube_cluster_name"],
               "tags": ["kube_cluster_name:$cluster"]
@@ -484,7 +483,7 @@
               "title": "Flow Verdicts (forwarded / dropped / error)",
               "requests": [
                 {
-                  "q": "sum:cilium.hubble.flows_processed_total{kube_cluster_name:$cluster,source_namespace:$src_ns} by {verdict}.as_count()",
+                  "q": "sum:cilium.hubble.flows_processed.count{kube_cluster_name:$cluster,source_namespace:$src_ns} by {verdict}.as_count()",
                   "display_type": "area",
                   "style": { "palette": "dog_classic" }
                 }
@@ -497,7 +496,7 @@
               "title": "Flows to World (External) with Anomaly Band",
               "requests": [
                 {
-                  "q": "anomalies(sum:cilium.hubble.flows_to_world_total{kube_cluster_name:$cluster}.as_rate(), 'robust', 2)",
+                  "q": "anomalies(sum:cilium.hubble.flows_to_world.count{kube_cluster_name:$cluster}.as_rate(), 'robust', 2)",
                   "display_type": "line",
                   "style": { "palette": "orange" }
                 }
@@ -510,12 +509,12 @@
               "title": "Policy Verdicts: Forwarded vs Dropped",
               "requests": [
                 {
-                  "q": "sum:cilium.hubble.policy_verdicts_total{kube_cluster_name:$cluster,verdict:forwarded,source_namespace:$src_ns}.as_count()",
+                  "q": "sum:cilium.hubble.policy_verdicts.count{kube_cluster_name:$cluster,verdict:forwarded,source_namespace:$src_ns}.as_count()",
                   "display_type": "area",
                   "style": { "palette": "green" }
                 },
                 {
-                  "q": "sum:cilium.hubble.policy_verdicts_total{kube_cluster_name:$cluster,verdict:dropped,source_namespace:$src_ns}.as_count()",
+                  "q": "sum:cilium.hubble.policy_verdicts.count{kube_cluster_name:$cluster,verdict:dropped,source_namespace:$src_ns}.as_count()",
                   "display_type": "area",
                   "style": { "palette": "red" }
                 }
@@ -528,7 +527,7 @@
               "title": "Flows by Namespace (top 10)",
               "requests": [
                 {
-                  "q": "top(sum:cilium.hubble.flows_processed_total{kube_cluster_name:$cluster} by {source_namespace}.as_count(), 10, 'sum', 'desc')",
+                  "q": "top(sum:cilium.hubble.flows_processed.count{kube_cluster_name:$cluster} by {source_namespace}.as_count(), 10, 'sum', 'desc')",
                   "display_type": "bars",
                   "style": { "palette": "dog_classic" }
                 }
@@ -541,7 +540,7 @@
               "title": "Hubble Lost Events by Source",
               "requests": [
                 {
-                  "q": "sum:cilium.hubble.lost_events_total{kube_cluster_name:$cluster} by {source}.as_count()",
+                  "q": "sum:cilium.hubble.lost_events.count{kube_cluster_name:$cluster} by {source}.as_count()",
                   "display_type": "bars",
                   "style": { "palette": "warm" }
                 }
@@ -561,13 +560,13 @@
                     {
                       "data_source": "metrics",
                       "name": "query1",
-                      "query": "sum:cilium.hubble.lost_events_total{kube_cluster_name:$cluster}.as_count()",
+                      "query": "sum:cilium.hubble.lost_events.count{kube_cluster_name:$cluster}.as_count()",
                       "aggregator": "sum"
                     },
                     {
                       "data_source": "metrics",
                       "name": "query2",
-                      "query": "sum:cilium.hubble.flows_processed_total{kube_cluster_name:$cluster}.as_count()",
+                      "query": "sum:cilium.hubble.flows_processed.count{kube_cluster_name:$cluster}.as_count()",
                       "aggregator": "sum"
                     }
                   ],
@@ -606,13 +605,13 @@
                     {
                       "data_source": "metrics",
                       "name": "query1",
-                      "query": "sum:cilium.hubble.dns_responses_total{rcode:No Error,kube_cluster_name:$cluster,source_namespace:$src_ns}.as_count()",
+                      "query": "sum:cilium.hubble.dns_responses.count{rcode:No Error,kube_cluster_name:$cluster,source_namespace:$src_ns}.as_count()",
                       "aggregator": "sum"
                     },
                     {
                       "data_source": "metrics",
                       "name": "query2",
-                      "query": "sum:cilium.hubble.dns_responses_total{kube_cluster_name:$cluster}.as_count()",
+                      "query": "sum:cilium.hubble.dns_responses.count{kube_cluster_name:$cluster}.as_count()",
                       "aggregator": "sum"
                     }
                   ],
@@ -641,13 +640,13 @@
                     {
                       "data_source": "metrics",
                       "name": "query1",
-                      "query": "sum:cilium.hubble.dns_responses_total{rcode:Non-Existent Domain,kube_cluster_name:$cluster}.as_count()",
+                      "query": "sum:cilium.hubble.dns_responses.count{rcode:Non-Existent Domain,kube_cluster_name:$cluster}.as_count()",
                       "aggregator": "sum"
                     },
                     {
                       "data_source": "metrics",
                       "name": "query2",
-                      "query": "sum:cilium.hubble.dns_responses_total{kube_cluster_name:$cluster}.as_count()",
+                      "query": "sum:cilium.hubble.dns_responses.count{kube_cluster_name:$cluster}.as_count()",
                       "aggregator": "sum"
                     }
                   ],
@@ -669,7 +668,7 @@
               "title": "DNS Query Rate with Anomaly Detection",
               "requests": [
                 {
-                  "q": "anomalies(sum:cilium.hubble.dns_queries_total{kube_cluster_name:$cluster,source_namespace:$src_ns}.as_rate(), 'agile', 3)",
+                  "q": "anomalies(sum:cilium.hubble.dns_queries.count{kube_cluster_name:$cluster,source_namespace:$src_ns}.as_rate(), 'agile', 3)",
                   "display_type": "line",
                   "style": { "palette": "cool" }
                 }
@@ -682,7 +681,7 @@
               "title": "DNS Responses by rcode",
               "requests": [
                 {
-                  "q": "sum:cilium.hubble.dns_responses_total{kube_cluster_name:$cluster} by {rcode}.as_count()",
+                  "q": "sum:cilium.hubble.dns_responses.count{kube_cluster_name:$cluster} by {rcode}.as_count()",
                   "display_type": "bars",
                   "style": { "palette": "dog_classic" }
                 }
@@ -695,7 +694,7 @@
               "title": "Top NXDOMAIN Sources (by namespace)",
               "requests": [
                 {
-                  "q": "top(sum:cilium.hubble.dns_responses_total{rcode:Non-Existent Domain,kube_cluster_name:$cluster} by {source_namespace}.as_count(), 10, 'sum', 'desc')"
+                  "q": "top(sum:cilium.hubble.dns_responses.count{rcode:Non-Existent Domain,kube_cluster_name:$cluster} by {source_namespace}.as_count(), 10, 'sum', 'desc')"
                 }
               ]
             }
@@ -716,7 +715,7 @@
               "title": "TCP Flags Distribution",
               "requests": [
                 {
-                  "q": "sum:cilium.hubble.tcp_flags_total{kube_cluster_name:$cluster} by {flag}.as_count()",
+                  "q": "sum:cilium.hubble.tcp_flags.count{kube_cluster_name:$cluster} by {flag}.as_count()",
                   "display_type": "bars",
                   "style": { "palette": "dog_classic" }
                 }
@@ -729,7 +728,7 @@
               "title": "TCP RST Rate (Connection Issues Indicator)",
               "requests": [
                 {
-                  "q": "sum:cilium.hubble.tcp_flags_total{kube_cluster_name:$cluster,flag:RST}.as_rate()",
+                  "q": "sum:cilium.hubble.tcp_flags.count{kube_cluster_name:$cluster,flag:RST}.as_rate()",
                   "display_type": "line",
                   "style": { "palette": "warm" }
                 }
@@ -742,7 +741,7 @@
               "title": "Top 10 Destination Ports",
               "requests": [
                 {
-                  "q": "top(sum:cilium.hubble.port_distribution_total{kube_cluster_name:$cluster} by {port}.as_count(), 10, 'sum', 'desc')"
+                  "q": "top(sum:cilium.hubble.port_distribution.count{kube_cluster_name:$cluster} by {port}.as_count(), 10, 'sum', 'desc')"
                 }
               ]
             }
@@ -810,7 +809,7 @@
                   "style": { "palette": "cool" }
                 },
                 {
-                  "q": "forecast(avg:cilium.bpf.map_pressure{kube_cluster_name:$cluster,map_name:cilium_ct4_global}, 'linear', 1)",
+                  "q": "forecast(avg:cilium.bpf.map_pressure{kube_cluster_name:$cluster,map_name:cilium_ct4_global}, 'linear', 3)",
                   "display_type": "line",
                   "style": { "palette": "warm", "line_type": "dashed" }
                 }
@@ -958,13 +957,13 @@
                     {
                       "data_source": "metrics",
                       "name": "query1",
-                      "query": "avg:cilium.policy.implementation_delay.seconds.sum{kube_cluster_name:$cluster}",
+                      "query": "avg:cilium.policy.implementation_delay.sum{kube_cluster_name:$cluster}",
                       "aggregator": "avg"
                     },
                     {
                       "data_source": "metrics",
                       "name": "query2",
-                      "query": "avg:cilium.policy.implementation_delay.seconds.count{kube_cluster_name:$cluster}",
+                      "query": "avg:cilium.policy.implementation_delay.count{kube_cluster_name:$cluster}",
                       "aggregator": "avg"
                     }
                   ],
@@ -1044,7 +1043,7 @@
               "type": "note",
               "content": "**Capacity Planning** tracks growth rates and projected exhaustion for identities (limit: 65535), BPF maps, endpoints, and IP addresses. Use forecasts to plan ahead.\n\n**AKS note:** IP addresses are managed by Azure VNET (delegated IPAM). cilium.ipam.capacity may not be populated.",
               "background_color": "gray",
-              "font_size": "12",
+              "font_size": "14",
               "text_align": "left",
               "show_tick": false
             }
@@ -1078,7 +1077,7 @@
                   "style": { "palette": "cool" }
                 },
                 {
-                  "q": "forecast(sum:cilium.identity.count{kube_cluster_name:$cluster}, 'linear', 1)",
+                  "q": "forecast(sum:cilium.identity.count{kube_cluster_name:$cluster}, 'linear', 3)",
                   "display_type": "line",
                   "style": { "palette": "warm", "line_type": "dashed" }
                 }
@@ -1103,7 +1102,7 @@
                   "style": { "palette": "cool" }
                 },
                 {
-                  "q": "forecast(sum:cilium.endpoint.count{kube_cluster_name:$cluster}, 'linear', 1)",
+                  "q": "forecast(sum:cilium.endpoint.count{kube_cluster_name:$cluster}, 'linear', 3)",
                   "display_type": "line",
                   "style": { "palette": "warm", "line_type": "dashed" }
                 }
@@ -1243,7 +1242,7 @@
               "type": "note",
               "content": "**AKS note:** IPAM is Azure-delegated. `cilium.operator.ipam.*` metrics may show limited data as Azure VNET manages pod IPs directly. LB-IPAM is not used on AKS.",
               "background_color": "yellow",
-              "font_size": "12",
+              "font_size": "14",
               "text_align": "left",
               "show_tick": false
             }
@@ -1357,6 +1356,501 @@
                   "display_type": "line",
                   "style": { "line_type": "dashed" }
                 }
+              ]
+            }
+          }
+        ]
+      }
+    },
+
+    {
+      "definition": {
+        "type": "group",
+        "title": "Node Health Overview (AKS)",
+        "layout_type": "ordered",
+        "widgets": [
+          {
+            "definition": {
+              "type": "note",
+              "content": "**Node Health Overview** provides full visibility into AKS node resources: CPU, memory, disk, network, load, and Kubernetes scheduling state. Uses `system.*` metrics from the Agent DaemonSet, `kubernetes.*` from the Kubelet, and `kubernetes_state.node.*` from the KSM Core check.\n\n**Tip:** Set **$node** to drill into a specific node. Green = healthy, yellow = warning, red = critical.",
+              "background_color": "gray",
+              "font_size": "14",
+              "text_align": "left",
+              "show_tick": false
+            }
+          },
+          {
+            "definition": {
+              "type": "query_value",
+              "title": "Total Nodes",
+              "requests": [
+                {
+                  "q": "sum:kubernetes_state.node.count{kube_cluster_name:$cluster}",
+                  "aggregator": "last"
+                }
+              ],
+              "precision": 0,
+              "autoscale": true
+            }
+          },
+          {
+            "definition": {
+              "type": "query_value",
+              "title": "Nodes Ready",
+              "requests": [
+                {
+                  "q": "sum:kubernetes_state.node.by_condition{kube_cluster_name:$cluster,condition:ready,status:true}",
+                  "aggregator": "last"
+                }
+              ],
+              "precision": 0,
+              "conditional_formats": [
+                { "comparator": ">", "value": 0, "palette": "white_on_green" },
+                { "comparator": "<=", "value": 0, "palette": "white_on_red" }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "query_value",
+              "title": "Nodes NotReady",
+              "requests": [
+                {
+                  "q": "sum:kubernetes_state.node.by_condition{kube_cluster_name:$cluster,condition:ready,status:false}",
+                  "aggregator": "last"
+                }
+              ],
+              "precision": 0,
+              "conditional_formats": [
+                { "comparator": "<=", "value": 0, "palette": "white_on_green" },
+                { "comparator": ">", "value": 0, "palette": "white_on_red" }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "query_value",
+              "title": "Nodes w/ MemoryPressure",
+              "requests": [
+                {
+                  "q": "sum:kubernetes_state.node.by_condition{kube_cluster_name:$cluster,condition:memorypressure,status:true}",
+                  "aggregator": "last"
+                }
+              ],
+              "precision": 0,
+              "conditional_formats": [
+                { "comparator": "<=", "value": 0, "palette": "white_on_green" },
+                { "comparator": ">", "value": 0, "palette": "white_on_red" }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "query_value",
+              "title": "Nodes w/ DiskPressure",
+              "requests": [
+                {
+                  "q": "sum:kubernetes_state.node.by_condition{kube_cluster_name:$cluster,condition:diskpressure,status:true}",
+                  "aggregator": "last"
+                }
+              ],
+              "precision": 0,
+              "conditional_formats": [
+                { "comparator": "<=", "value": 0, "palette": "white_on_green" },
+                { "comparator": ">", "value": 0, "palette": "white_on_red" }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "query_value",
+              "title": "Nodes w/ PIDPressure",
+              "requests": [
+                {
+                  "q": "sum:kubernetes_state.node.by_condition{kube_cluster_name:$cluster,condition:pidpressure,status:true}",
+                  "aggregator": "last"
+                }
+              ],
+              "precision": 0,
+              "conditional_formats": [
+                { "comparator": "<=", "value": 0, "palette": "white_on_green" },
+                { "comparator": ">", "value": 0, "palette": "white_on_red" }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "query_value",
+              "title": "Unschedulable Nodes",
+              "requests": [
+                {
+                  "q": "sum:kubernetes_state.node.status{kube_cluster_name:$cluster,status:unschedulable}",
+                  "aggregator": "last"
+                }
+              ],
+              "precision": 0,
+              "conditional_formats": [
+                { "comparator": "<=", "value": 0, "palette": "white_on_green" },
+                { "comparator": ">", "value": 0, "palette": "white_on_yellow" }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "hostmap",
+              "title": "Node CPU Utilization Heatmap",
+              "requests": {
+                "fill": {
+                  "q": "avg:system.cpu.user{kube_cluster_name:$cluster,host:$node} by {host} + avg:system.cpu.system{kube_cluster_name:$cluster,host:$node} by {host}"
+                }
+              },
+              "node_type": "host",
+              "scope": ["kube_cluster_name:$cluster"],
+              "group": ["availability-zone"],
+              "no_metric_hosts": false,
+              "no_group_hosts": true,
+              "style": {
+                "palette": "green_to_orange",
+                "palette_flip": false
+              }
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "CPU Usage by Node (%)",
+              "requests": [
+                {
+                  "q": "avg:system.cpu.user{kube_cluster_name:$cluster,host:$node} by {host}",
+                  "display_type": "line",
+                  "style": { "palette": "cool" }
+                },
+                {
+                  "q": "avg:system.cpu.system{kube_cluster_name:$cluster,host:$node} by {host}",
+                  "display_type": "line",
+                  "style": { "palette": "warm" }
+                },
+                {
+                  "q": "avg:system.cpu.iowait{kube_cluster_name:$cluster,host:$node} by {host}",
+                  "display_type": "line",
+                  "style": { "palette": "orange", "line_type": "dashed" }
+                }
+              ],
+              "yaxis": { "include_zero": true, "max": "100" },
+              "markers": [
+                { "value": "y = 80", "display_type": "warning dashed", "label": "Warning 80%" },
+                { "value": "y = 95", "display_type": "error dashed", "label": "Critical 95%" }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "CPU Stolen (Hypervisor) by Node",
+              "requests": [
+                {
+                  "q": "avg:system.cpu.stolen{kube_cluster_name:$cluster,host:$node} by {host}",
+                  "display_type": "bars",
+                  "style": { "palette": "warm" }
+                }
+              ],
+              "markers": [
+                { "value": "y = 5", "display_type": "warning dashed", "label": "Steal > 5% = noisy neighbor" }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "query_value",
+              "title": "Avg Memory Usable %",
+              "requests": [
+                {
+                  "q": "avg:system.mem.pct_usable{kube_cluster_name:$cluster,host:$node} * 100",
+                  "aggregator": "last"
+                }
+              ],
+              "precision": 1,
+              "autoscale": false,
+              "custom_unit": "%",
+              "conditional_formats": [
+                { "comparator": ">", "value": 20, "palette": "white_on_green" },
+                { "comparator": ">", "value": 10, "palette": "white_on_yellow" },
+                { "comparator": "<=", "value": 10, "palette": "white_on_red" }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Memory Usage by Node",
+              "requests": [
+                {
+                  "q": "avg:system.mem.used{kube_cluster_name:$cluster,host:$node} by {host}",
+                  "display_type": "line",
+                  "style": { "palette": "cool" }
+                },
+                {
+                  "q": "avg:system.mem.total{kube_cluster_name:$cluster,host:$node} by {host}",
+                  "display_type": "line",
+                  "style": { "palette": "grey", "line_type": "dashed" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "K8s Memory: Requests vs Allocatable vs Usage (by node)",
+              "requests": [
+                {
+                  "q": "avg:kubernetes.memory.usage{kube_cluster_name:$cluster,host:$node} by {host}",
+                  "display_type": "line",
+                  "style": { "palette": "cool" }
+                },
+                {
+                  "q": "avg:kubernetes_state.node.memory_allocatable{kube_cluster_name:$cluster,host:$node} by {host}",
+                  "display_type": "line",
+                  "style": { "palette": "grey", "line_type": "dashed" }
+                },
+                {
+                  "q": "sum:kubernetes.memory.requests{kube_cluster_name:$cluster,host:$node} by {host}",
+                  "display_type": "line",
+                  "style": { "palette": "warm", "line_type": "dotted" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "K8s CPU: Requests vs Allocatable vs Usage (by node)",
+              "requests": [
+                {
+                  "q": "avg:kubernetes.cpu.usage.total{kube_cluster_name:$cluster,host:$node} by {host}",
+                  "display_type": "line",
+                  "style": { "palette": "cool" }
+                },
+                {
+                  "q": "avg:kubernetes_state.node.cpu_allocatable{kube_cluster_name:$cluster,host:$node} by {host}",
+                  "display_type": "line",
+                  "style": { "palette": "grey", "line_type": "dashed" }
+                },
+                {
+                  "q": "sum:kubernetes.cpu.requests{kube_cluster_name:$cluster,host:$node} by {host}",
+                  "display_type": "line",
+                  "style": { "palette": "warm", "line_type": "dotted" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Disk Usage % by Node",
+              "requests": [
+                {
+                  "q": "avg:system.disk.in_use{kube_cluster_name:$cluster,host:$node} by {host} * 100",
+                  "display_type": "line",
+                  "style": { "palette": "cool" }
+                }
+              ],
+              "yaxis": { "include_zero": true, "max": "100" },
+              "markers": [
+                { "value": "y = 80", "display_type": "warning dashed", "label": "Warning 80%" },
+                { "value": "y = 90", "display_type": "error dashed", "label": "Critical 90%" }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Disk I/O Utilization by Node",
+              "requests": [
+                {
+                  "q": "avg:system.io.util{kube_cluster_name:$cluster,host:$node} by {host}",
+                  "display_type": "line",
+                  "style": { "palette": "warm" }
+                }
+              ],
+              "markers": [
+                { "value": "y = 80", "display_type": "warning dashed", "label": "High I/O 80%" }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Network Throughput by Node (bytes/s)",
+              "requests": [
+                {
+                  "q": "avg:system.net.bytes_rcvd{kube_cluster_name:$cluster,host:$node} by {host}",
+                  "display_type": "line",
+                  "style": { "palette": "cool" }
+                },
+                {
+                  "q": "avg:system.net.bytes_sent{kube_cluster_name:$cluster,host:$node} by {host}",
+                  "display_type": "line",
+                  "style": { "palette": "warm" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Network Errors & Drops by Node",
+              "requests": [
+                {
+                  "q": "sum:system.net.packets_in.error{kube_cluster_name:$cluster,host:$node} by {host}",
+                  "display_type": "bars",
+                  "style": { "palette": "warm" }
+                },
+                {
+                  "q": "sum:system.net.packets_out.error{kube_cluster_name:$cluster,host:$node} by {host}",
+                  "display_type": "bars",
+                  "style": { "palette": "orange" }
+                },
+                {
+                  "q": "sum:system.net.packets_in.drop{kube_cluster_name:$cluster,host:$node} by {host}",
+                  "display_type": "bars",
+                  "style": { "palette": "red" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "System Conntrack Usage by Node",
+              "requests": [
+                {
+                  "q": "avg:system.net.conntrack.count{kube_cluster_name:$cluster,host:$node} by {host}",
+                  "display_type": "line",
+                  "style": { "palette": "cool" }
+                },
+                {
+                  "q": "avg:system.net.conntrack.max{kube_cluster_name:$cluster,host:$node} by {host}",
+                  "display_type": "line",
+                  "style": { "palette": "grey", "line_type": "dashed" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Normalized Load Average by Node",
+              "requests": [
+                {
+                  "q": "avg:system.load.norm.1{kube_cluster_name:$cluster,host:$node} by {host}",
+                  "display_type": "line",
+                  "style": { "palette": "dog_classic" }
+                },
+                {
+                  "q": "avg:system.load.norm.5{kube_cluster_name:$cluster,host:$node} by {host}",
+                  "display_type": "line",
+                  "style": { "palette": "cool", "line_type": "dashed" }
+                },
+                {
+                  "q": "avg:system.load.norm.15{kube_cluster_name:$cluster,host:$node} by {host}",
+                  "display_type": "line",
+                  "style": { "palette": "warm", "line_type": "dotted" }
+                }
+              ],
+              "markers": [
+                { "value": "y = 1", "display_type": "warning dashed", "label": "Fully loaded (norm=1)" },
+                { "value": "y = 2", "display_type": "error dashed", "label": "Overloaded (norm=2)" }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "toplist",
+              "title": "Top Nodes by Running Pods",
+              "requests": [
+                {
+                  "q": "top(avg:kubernetes.pods.running{kube_cluster_name:$cluster} by {host}, 20, 'last', 'desc')"
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Pods Running vs Allocatable (by node)",
+              "requests": [
+                {
+                  "q": "avg:kubernetes.pods.running{kube_cluster_name:$cluster,host:$node} by {host}",
+                  "display_type": "line",
+                  "style": { "palette": "cool" }
+                },
+                {
+                  "q": "avg:kubernetes_state.node.pods_allocatable{kube_cluster_name:$cluster,host:$node} by {host}",
+                  "display_type": "line",
+                  "style": { "palette": "grey", "line_type": "dashed" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "query_value",
+              "title": "Avg Node Uptime (days)",
+              "requests": [
+                {
+                  "formulas": [
+                    { "formula": "query1 / 86400" }
+                  ],
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "query1",
+                      "query": "avg:system.uptime{kube_cluster_name:$cluster,host:$node}",
+                      "aggregator": "last"
+                    }
+                  ],
+                  "response_format": "scalar"
+                }
+              ],
+              "precision": 1,
+              "autoscale": false,
+              "custom_unit": "days"
+            }
+          },
+          {
+            "definition": {
+              "type": "query_value",
+              "title": "OOM Kills (last timeframe)",
+              "requests": [
+                {
+                  "q": "sum:oom_kill.oom_process.count{kube_cluster_name:$cluster,host:$node}.as_count()",
+                  "aggregator": "sum"
+                }
+              ],
+              "precision": 0,
+              "conditional_formats": [
+                { "comparator": "<=", "value": 0, "palette": "white_on_green" },
+                { "comparator": "<=", "value": 5, "palette": "white_on_yellow" },
+                { "comparator": ">", "value": 5, "palette": "white_on_red" }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "query_value",
+              "title": "TCP Queue Max Read Buffer %",
+              "requests": [
+                {
+                  "q": "max:tcp_queue.read_buffer_max_usage_pct{kube_cluster_name:$cluster,host:$node}",
+                  "aggregator": "max"
+                }
+              ],
+              "precision": 1,
+              "custom_unit": "%",
+              "conditional_formats": [
+                { "comparator": "<=", "value": 50, "palette": "white_on_green" },
+                { "comparator": "<=", "value": 80, "palette": "white_on_yellow" },
+                { "comparator": ">", "value": 80, "palette": "white_on_red" }
               ]
             }
           }

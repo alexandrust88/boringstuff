@@ -16,13 +16,19 @@
 #   2. cilium check      -> operator metrics (port 6942, cilium-operator pods)
 #   3. openmetrics check -> hubble metrics   (port 9965, cilium-agent pods)
 #   4. coredns check     -> coredns metrics  (port 9153, coredns pods)
-#   5. kube_state_metrics -> ksm metrics     (port 8080, kube-state-metrics pods)
 #
 # references:
 #   - https://docs.datadoghq.com/integrations/cilium/
 #   - https://github.com/DataDog/integrations-core/blob/master/cilium/README.md
 #   - https://www.datadoghq.com/blog/monitor-cilium-cni-with-datadog/
+#   - https://docs.datadoghq.com/containers/kubernetes/distributions/?tab=helm
 # =============================================================================
+
+# --- AKS-specific provider setting ---
+# required: the chart cannot auto-detect AKS
+providers:
+  aks:
+    enabled: true
 
 datadog:
   # --- api key (stored in k8s secret) ---
@@ -43,6 +49,18 @@ datadog:
     - "cloud:azure"
     - "managed:aks"
 
+  # --- kubernetes event collection ---
+  collectEvents: true
+
+  # --- leader election ---
+  leaderElection: true
+  leaderElectionResource: leases
+
+  # --- kubelet configuration ---
+  # AKS: disable TLS verification if kubelet serving cert rotation not enabled
+  kubelet:
+    tlsVerify: false
+
   # --- cloud network monitoring (cnm, formerly npm) ---
   # uses eBPF kprobes independent of cilium for network topology maps
   networkMonitoring:
@@ -51,14 +69,17 @@ datadog:
   # --- system probe for deep kernel visibility ---
   systemProbe:
     enabled: true
-    conntrackEnabled: true            # connection tracking for network maps
-    enableTCPQueueLength: true        # detect saturated TCP send/receive queues
-    enableOOMKill: true               # track OOM kill events per container
+    conntrackEnabled: true              # connection tracking for network maps
+    enableTCPQueueLength: true          # detect saturated TCP send/receive queues
+    enableOOMKill: true                 # track OOM kill events per container
+    enableConntrack: true               # NAT conntrack for proper source mapping
+    collectDNSStats: true               # DNS resolution statistics
+    maxTrackedConnections: 131072       # default; increase for large clusters
 
   # --- process agent ---
   processAgent:
     enabled: true
-    processCollection: true           # live process monitoring
+    processCollection: true             # live process monitoring
 
   # --- orchestrator explorer ---
   # provides live k8s resource views in datadog
@@ -70,6 +91,10 @@ datadog:
     enabled: true
     containerCollectAll: true
 
+  # --- reduce log noise from kube-system (metrics still collected) ---
+  containerExcludeLogs: "kube_namespace:kube-system"
+  excludePauseContainer: true
+
   # --- prometheus scraping (backup, confd is preferred) ---
   prometheusScrape:
     enabled: true
@@ -79,6 +104,26 @@ datadog:
   # auto-discovers services and generates service maps via eBPF
   serviceMonitoring:
     enabled: true
+
+  # --- APM ---
+  apm:
+    socketEnabled: true                 # UDS socket for APM traces
+    portEnabled: false                  # disable TCP port 8126 if not needed
+
+  # --- dogstatsd for custom metrics ---
+  dogstatsd:
+    port: 8125
+    useSocketVolume: true               # use UDS socket for dogstatsd
+    socketPath: /var/run/datadog/dsd.socket
+    originDetection: true               # container-level tagging on custom metrics
+    nonLocalTraffic: true               # accept metrics from other containers
+
+  # --- kube-state-metrics core check (runs in cluster agent) ---
+  kubeStateMetricsCore:
+    enabled: true
+    collectSecretMetrics: true
+    collectConfigMaps: true
+    collectApiServicesMetrics: true
 
   # --- check configurations ---
   confd:
@@ -93,6 +138,7 @@ datadog:
           use_openmetrics: true
           collect_histogram_buckets: true
           histogram_buckets_as_distributions: true
+          collect_counters_with_distributions: true
           min_collection_interval: 15
           tags:
             - "component:cilium-agent"
@@ -108,6 +154,7 @@ datadog:
           use_openmetrics: true
           collect_histogram_buckets: true
           histogram_buckets_as_distributions: true
+          collect_counters_with_distributions: true
           min_collection_interval: 15
           tags:
             - "component:cilium-operator"
@@ -115,6 +162,14 @@ datadog:
     # check 3: hubble metrics (openmetrics check)
     # on AKS, hubble is embedded in cilium-agent (no relay)
     # so ad_identifier is cilium-agent, port 9965 on the same pod
+    #
+    # IMPORTANT: namespace + raw_metric_prefix interaction:
+    #   raw metric:       hubble_dns_queries_total
+    #   raw_metric_prefix strips "hubble_" -> dns_queries_total
+    #   namespace prepends "cilium.hubble." -> cilium.hubble.dns_queries.count
+    #
+    #   without raw_metric_prefix you'd get: cilium.hubble.hubble_dns_queries.count
+    #   (double prefix!)
     hubble.yaml: |-
       ad_identifiers:
         - cilium-agent
@@ -122,11 +177,27 @@ datadog:
       instances:
         - openmetrics_endpoint: http://%%host%%:9965/metrics
           namespace: cilium.hubble
+          raw_metric_prefix: "hubble_"
           metrics:
-            - "hubble_.*"
+            # --- flow metrics (core visibility) ---
+            - flows_processed_total
+            - drop_total
+            - flows_to_world_total
+            - port_distribution_total
+            # --- policy metrics ---
+            - policy_verdicts_total
+            # --- DNS metrics ---
+            - dns_queries_total
+            - dns_responses_total
+            - dns_response_types_total
+            # --- TCP metrics ---
+            - tcp_flags_total
+            # --- event loss tracking ---
+            - lost_events_total
           use_openmetrics: true
           collect_histogram_buckets: true
           histogram_buckets_as_distributions: true
+          collect_counters_with_distributions: true
           min_collection_interval: 15
           tags:
             - "component:hubble"
@@ -142,29 +213,64 @@ datadog:
           tags:
             - "component:coredns"
 
-    # check 5: kube-state-metrics (if deployed)
-    # provides pod/node/deployment state for correlating with cilium metrics
-    # NOTE: only needed if kube-state-metrics is not already auto-discovered
-    # kube_state_metrics.yaml: |-
-    #   ad_identifiers:
-    #     - kube-state-metrics
-    #   init_config:
-    #   instances:
-    #     - kube_state_url: http://%%host%%:8080/metrics
-    #       tags:
-    #         - "component:kube-state-metrics"
-
 # --- cluster agent ---
 clusterAgent:
   enabled: true
+  replicas: 2                             # HA for production clusters
   config:
     externalMetrics:
-      enabled: true                   # for HPA based on cilium/datadog metrics
+      enabled: true                       # for HPA based on cilium/datadog metrics
+    clusterChecks:
+      enabled: true                       # dispatch checks from cluster agent
+  admissionController:
+    enabled: true                         # auto-inject DD_AGENT_HOST, APM env vars
+    mutateUnlabelled: false               # only inject into labelled pods
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
 
 # --- agent daemonset ---
 agents:
   tolerations:
-    - operator: Exists                # run on all nodes including cilium nodes
+    - operator: Exists                    # run on all nodes including cilium nodes
+
+  containers:
+    agent:
+      resources:
+        requests:
+          cpu: 200m
+          memory: 256Mi
+        limits:
+          cpu: 500m
+          memory: 512Mi
+    processAgent:
+      resources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          cpu: 250m
+          memory: 256Mi
+    traceAgent:
+      resources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          cpu: 250m
+          memory: 256Mi
+    systemProbe:
+      resources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          cpu: 500m
+          memory: 512Mi
 
 
 # =============================================================================
@@ -182,6 +288,7 @@ agents:
 #           use_openmetrics: true
 #           collect_histogram_buckets: true
 #           histogram_buckets_as_distributions: true
+#           collect_counters_with_distributions: true
 #           min_collection_interval: 15
 #           tags:
 #             - "component:cilium-agent"
@@ -196,6 +303,7 @@ agents:
 #           use_openmetrics: true
 #           collect_histogram_buckets: true
 #           histogram_buckets_as_distributions: true
+#           collect_counters_with_distributions: true
 #           min_collection_interval: 15
 #           tags:
 #             - "component:cilium-operator"
@@ -208,11 +316,22 @@ agents:
 #       instances:
 #         - openmetrics_endpoint: http://%%host%%:9965/metrics
 #           namespace: cilium.hubble
+#           raw_metric_prefix: "hubble_"
 #           metrics:
-#             - "hubble_.*"
+#             - flows_processed_total
+#             - drop_total
+#             - flows_to_world_total
+#             - port_distribution_total
+#             - policy_verdicts_total
+#             - dns_queries_total
+#             - dns_responses_total
+#             - dns_response_types_total
+#             - tcp_flags_total
+#             - lost_events_total
 #           use_openmetrics: true
 #           collect_histogram_buckets: true
 #           histogram_buckets_as_distributions: true
+#           collect_counters_with_distributions: true
 #           min_collection_interval: 15
 #           tags:
 #             - "component:hubble"
@@ -245,3 +364,13 @@ agents:
 #
 # verify coredns exposes metrics:
 # kubectl exec -n kube-system deploy/coredns -- wget -qO- http://localhost:9153/metrics | head -20
+#
+# verify cluster agent:
+# kubectl exec -n datadog deploy/datadog-cluster-agent -- agent status
+# kubectl exec -n datadog deploy/datadog-cluster-agent -- agent clusterchecks
+#
+# verify AKS provider is active:
+# kubectl exec -n datadog ds/datadog -- agent status | grep -i aks
+#
+# verify hubble metric names are correct (no double prefix):
+# kubectl exec -n datadog ds/datadog -- agent check openmetrics 2>&1 | grep cilium.hubble
