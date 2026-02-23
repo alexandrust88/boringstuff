@@ -78,7 +78,12 @@
                   "formulas": [
                     {
                       "formula": "(query1 - query2) / query1 * 100",
-                      "limit": { "count": 1, "order": "desc" }
+                      "limit": { "count": 1, "order": "desc" },
+                      "conditional_formats": [
+                        { "comparator": ">=", "value": 90, "palette": "white_on_green" },
+                        { "comparator": ">=", "value": 70, "palette": "white_on_yellow" },
+                        { "comparator": "<", "value": 70, "palette": "white_on_red" }
+                      ]
                     }
                   ],
                   "queries": [
@@ -100,12 +105,7 @@
               ],
               "precision": 1,
               "autoscale": false,
-              "custom_unit": "%",
-              "conditional_formats": [
-                { "comparator": ">=", "value": 90, "palette": "white_on_green" },
-                { "comparator": ">=", "value": 70, "palette": "white_on_yellow" },
-                { "comparator": "<", "value": 70, "palette": "white_on_red" }
-              ]
+              "custom_unit": "%"
             }
           },
           {
@@ -116,7 +116,12 @@
                 {
                   "formulas": [
                     {
-                      "formula": "query1 / (query1 + query2) * 100"
+                      "formula": "query1 / (query1 + query2) * 100",
+                      "conditional_formats": [
+                        { "comparator": "<=", "value": 0.1, "palette": "white_on_green" },
+                        { "comparator": "<=", "value": 1, "palette": "white_on_yellow" },
+                        { "comparator": ">", "value": 1, "palette": "white_on_red" }
+                      ]
                     }
                   ],
                   "queries": [
@@ -138,12 +143,7 @@
               ],
               "precision": 3,
               "autoscale": false,
-              "custom_unit": "%",
-              "conditional_formats": [
-                { "comparator": "<=", "value": 0.1, "palette": "white_on_green" },
-                { "comparator": "<=", "value": 1, "palette": "white_on_yellow" },
-                { "comparator": ">", "value": 1, "palette": "white_on_red" }
-              ]
+              "custom_unit": "%"
             }
           },
           {
@@ -554,7 +554,14 @@
               "requests": [
                 {
                   "formulas": [
-                    { "formula": "query1 / (query1 + query2) * 100" }
+                    {
+                      "formula": "query1 / (query1 + query2) * 100",
+                      "conditional_formats": [
+                        { "comparator": "<=", "value": 0.1, "palette": "white_on_green" },
+                        { "comparator": "<=", "value": 1, "palette": "white_on_yellow" },
+                        { "comparator": ">", "value": 1, "palette": "white_on_red" }
+                      ]
+                    }
                   ],
                   "queries": [
                     {
@@ -574,12 +581,7 @@
                 }
               ],
               "precision": 2,
-              "custom_unit": "%",
-              "conditional_formats": [
-                { "comparator": "<=", "value": 0.1, "palette": "white_on_green" },
-                { "comparator": "<=", "value": 1, "palette": "white_on_yellow" },
-                { "comparator": ">", "value": 1, "palette": "white_on_red" }
-              ]
+              "custom_unit": "%"
             }
           }
         ]
@@ -599,7 +601,14 @@
               "requests": [
                 {
                   "formulas": [
-                    { "formula": "query1 / query2 * 100" }
+                    {
+                      "formula": "query1 / query2 * 100",
+                      "conditional_formats": [
+                        { "comparator": ">=", "value": 99, "palette": "white_on_green" },
+                        { "comparator": ">=", "value": 95, "palette": "white_on_yellow" },
+                        { "comparator": "<", "value": 95, "palette": "white_on_red" }
+                      ]
+                    }
                   ],
                   "queries": [
                     {
@@ -619,12 +628,7 @@
                 }
               ],
               "precision": 1,
-              "custom_unit": "%",
-              "conditional_formats": [
-                { "comparator": ">=", "value": 99, "palette": "white_on_green" },
-                { "comparator": ">=", "value": 95, "palette": "white_on_yellow" },
-                { "comparator": "<", "value": 95, "palette": "white_on_red" }
-              ]
+              "custom_unit": "%"
             }
           },
           {
@@ -634,7 +638,14 @@
               "requests": [
                 {
                   "formulas": [
-                    { "formula": "query1 / query2 * 100" }
+                    {
+                      "formula": "query1 / query2 * 100",
+                      "conditional_formats": [
+                        { "comparator": "<=", "value": 5, "palette": "white_on_green" },
+                        { "comparator": "<=", "value": 15, "palette": "white_on_yellow" },
+                        { "comparator": ">", "value": 15, "palette": "white_on_red" }
+                      ]
+                    }
                   ],
                   "queries": [
                     {
@@ -654,12 +665,7 @@
                 }
               ],
               "precision": 1,
-              "custom_unit": "%",
-              "conditional_formats": [
-                { "comparator": "<=", "value": 5, "palette": "white_on_green" },
-                { "comparator": "<=", "value": 15, "palette": "white_on_yellow" },
-                { "comparator": ">", "value": 15, "palette": "white_on_red" }
-              ]
+              "custom_unit": "%"
             }
           },
           {
