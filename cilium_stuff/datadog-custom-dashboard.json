@@ -1777,11 +1777,11 @@
             "definition": {
               "type": "hostmap",
               "title": "Node CPU Utilization Heatmap",
-              "requests": [
-                {
+              "requests": {
+                "fill": {
                   "q": "avg:system.cpu.user{kube_cluster_name:$cluster,host:$node} by {host} + avg:system.cpu.system{kube_cluster_name:$cluster,host:$node} by {host}"
                 }
-              ],
+              },
               "node_type": "host",
               "scope": [
                 "kube_cluster_name:$cluster"
