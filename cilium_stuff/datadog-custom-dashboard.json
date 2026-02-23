@@ -8,7 +8,7 @@
       "name": "cluster",
       "prefix": "kube_cluster_name",
       "available_values": [],
-      "default": "*"
+      "default": "cal-*"
     },
     {
       "name": "node",
@@ -25,11 +25,11 @@
   ],
   "template_variable_presets": [
     {
-      "name": "All Clusters",
+      "name": "All CAL Clusters",
       "template_variables": [
         {
           "name": "cluster",
-          "value": "*"
+          "value": "cal-*"
         },
         {
           "name": "node",
@@ -42,11 +42,11 @@
       ]
     },
     {
-      "name": "Production Only",
+      "name": "All Clusters",
       "template_variables": [
         {
           "name": "cluster",
-          "value": "prod-*"
+          "value": "*"
         },
         {
           "name": "node",
