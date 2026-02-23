@@ -11,6 +11,23 @@
 #   - https://docs.datadoghq.com/api/latest/service-level-objectives/
 #   - https://www.datadoghq.com/blog/cilium-metrics-and-architecture/
 #   - https://www.datadoghq.com/blog/cilium-operations-at-scale/
+#
+# BEFORE DEPLOYING: replace all placeholder monitor IDs in composite monitors
+# and SLOs with actual numeric IDs from your Datadog account:
+#   <failing_controllers_monitor_id>
+#   <unreachable_nodes_monitor_id>
+#   <policy_import_errors_monitor_id>
+#   <policy_denials_monitor_id>
+#   <drop_anomaly_monitor_id>
+#   <external_traffic_anomaly_monitor_id>
+#
+# to find monitor IDs after creating individual monitors:
+#   curl -X GET "https://api.datadoghq.eu/api/v1/monitor" \
+#     -H "DD-API-KEY: $DD_API_KEY" -H "DD-APPLICATION-KEY: $DD_APP_KEY" \
+#     | jq '.[] | {id, name}' | grep cilium
+#
+# DNS rcode tag values depend on Cilium version. verify yours with:
+#   kubectl exec -n kube-system ds/cilium -- curl -s localhost:9965/metrics | grep dns_responses
 # =============================================================================
 
 

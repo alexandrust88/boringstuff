@@ -77,6 +77,9 @@ cilium_configmap_overrides:
     - "drop:sourceContext=namespace|reserved-identity;destinationContext=namespace|reserved-identity;labelsContext=source_namespace,destination_namespace,traffic_direction"
     - "tcp:sourceContext=namespace|reserved-identity;destinationContext=namespace|reserved-identity"
     - "flow:sourceContext=namespace|reserved-identity;destinationContext=namespace|reserved-identity;labelsContext=traffic_direction"
+    # NOTE: httpV2 requires Envoy L7 proxy for HTTP-level inspection.
+    # On AKS without Envoy, this plugin generates no meaningful metrics.
+    # Include only if you plan to enable Envoy in the future.
     - "httpV2:exemplars=true;labelsContext=source_namespace,source_workload,destination_namespace,destination_workload,traffic_direction"
     - "icmp:sourceContext=namespace|reserved-identity;destinationContext=namespace|reserved-identity"
     - "policy:sourceContext=namespace|reserved-identity;destinationContext=namespace|reserved-identity;labelsContext=traffic_direction"

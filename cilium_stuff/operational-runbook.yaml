@@ -84,7 +84,10 @@ upgrade_preflight:
         cilium-dbg preflight validate-cnp
     - desc: "run connectivity test (pod-to-pod, pod-to-service, external)"
       cmd: "cilium connectivity test"
-      note: "runs as Helm post-upgrade hook; failures block rollouts"
+      note: |
+        On AKS: Cilium is managed by Azure, not Helm. Run this CLI command directly
+        if cilium CLI is installed. Does NOT run as automatic Helm hook on AKS.
+        For self-managed Cilium: runs as Helm post-upgrade hook; failures block rollouts.
     - desc: "check BPF map pressure before upgrade"
       cmd: >
         kubectl exec -n kube-system ds/cilium --

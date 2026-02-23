@@ -18,8 +18,8 @@
       "default": "*"
     },
     {
-      "name": "namespace",
-      "prefix": "kube_namespace",
+      "name": "src_ns",
+      "prefix": "source_namespace",
       "available_values": [],
       "default": "*"
     }
@@ -30,7 +30,7 @@
       "template_variables": [
         { "name": "cluster", "value": "*" },
         { "name": "node", "value": "*" },
-        { "name": "namespace", "value": "*" }
+        { "name": "src_ns", "value": "*" }
       ]
     },
     {
@@ -38,7 +38,7 @@
       "template_variables": [
         { "name": "cluster", "value": "prod-*" },
         { "name": "node", "value": "*" },
-        { "name": "namespace", "value": "*" }
+        { "name": "src_ns", "value": "*" }
       ]
     }
   ],
@@ -46,7 +46,7 @@
     {
       "definition": {
         "type": "note",
-        "content": "## Cilium Deep Insights Dashboard\n\nThis dashboard goes beyond the default Cilium integration page. Set **$cluster** and optionally **$node** / **$namespace** at the top.\n\n**Metric naming:** Uses OpenMetrics v2 naming (`cilium.drop_count.count`, `cilium.hubble.flows_processed_total`, etc). If a widget shows 'No data', verify your Cilium + Datadog agent configuration matches the metrics reference.\n\n**Sections:** Security Posture → Agent/Operator Health → Drops & Network → Hubble Flows → DNS → TCP → eBPF Health → Policy → Capacity Planning → Kubernetes → Operator → Resources\n\n**AKS note:** No Envoy L7 proxy, no hubble relay (embedded in agent), no clustermesh. IPAM is Azure-delegated.",
+        "content": "## Cilium Deep Insights Dashboard\n\nThis dashboard goes beyond the default Cilium integration page. Set **$cluster** and optionally **$node** / **$src_ns** at the top.\n\n**Metric naming:** Uses OpenMetrics v2 naming (`cilium.drop_count.count`, `cilium.hubble.flows_processed_total`, etc). If a widget shows 'No data', verify your Cilium + Datadog agent configuration matches the metrics reference.\n\n**Sections:** Security Posture → Agent/Operator Health → Drops & Network → Hubble Flows → DNS → TCP → eBPF Health → Policy → Capacity Planning → Kubernetes → Operator → Resources\n\n**AKS note:** No Envoy L7 proxy, no hubble relay (embedded in agent), no clustermesh. IPAM is Azure-delegated.\n\n**DNS rcode note:** Tag values depend on Cilium version. Verify with: `kubectl exec -n kube-system ds/cilium -- curl -s localhost:9965/metrics | grep dns_responses`",
         "background_color": "vivid_blue",
         "font_size": "14",
         "text_align": "left",
@@ -153,7 +153,7 @@
               "title": "Policy Denials (last timeframe)",
               "requests": [
                 {
-                  "q": "sum:cilium.hubble.policy_verdicts_total{verdict:dropped,kube_cluster_name:$cluster}.as_count()",
+                  "q": "sum:cilium.hubble.policy_verdicts_total{verdict:dropped,kube_cluster_name:$cluster,source_namespace:$src_ns}.as_count()",
                   "aggregator": "sum"
                 }
               ],
@@ -171,7 +171,7 @@
               "title": "Policy Denials with Anomaly Detection",
               "requests": [
                 {
-                  "q": "anomalies(sum:cilium.hubble.policy_verdicts_total{verdict:dropped,kube_cluster_name:$cluster}.as_count(), 'agile', 3)",
+                  "q": "anomalies(sum:cilium.hubble.policy_verdicts_total{verdict:dropped,kube_cluster_name:$cluster,source_namespace:$src_ns}.as_count(), 'agile', 3)",
                   "display_type": "line",
                   "style": { "palette": "warm", "line_type": "solid", "line_width": "normal" }
                 }
@@ -184,7 +184,7 @@
               "title": "Policy Denials - Week over Week",
               "requests": [
                 {
-                  "q": "sum:cilium.hubble.policy_verdicts_total{verdict:dropped,kube_cluster_name:$cluster}.as_count()",
+                  "q": "sum:cilium.hubble.policy_verdicts_total{verdict:dropped,kube_cluster_name:$cluster,source_namespace:$src_ns}.as_count()",
                   "change_type": "absolute",
                   "compare_to": "week_before",
                   "order_by": "change",
@@ -484,7 +484,7 @@
               "title": "Flow Verdicts (forwarded / dropped / error)",
               "requests": [
                 {
-                  "q": "sum:cilium.hubble.flows_processed_total{kube_cluster_name:$cluster} by {verdict}.as_count()",
+                  "q": "sum:cilium.hubble.flows_processed_total{kube_cluster_name:$cluster,source_namespace:$src_ns} by {verdict}.as_count()",
                   "display_type": "area",
                   "style": { "palette": "dog_classic" }
                 }
@@ -510,12 +510,12 @@
               "title": "Policy Verdicts: Forwarded vs Dropped",
               "requests": [
                 {
-                  "q": "sum:cilium.hubble.policy_verdicts_total{kube_cluster_name:$cluster,verdict:forwarded}.as_count()",
+                  "q": "sum:cilium.hubble.policy_verdicts_total{kube_cluster_name:$cluster,verdict:forwarded,source_namespace:$src_ns}.as_count()",
                   "display_type": "area",
                   "style": { "palette": "green" }
                 },
                 {
-                  "q": "sum:cilium.hubble.policy_verdicts_total{kube_cluster_name:$cluster,verdict:dropped}.as_count()",
+                  "q": "sum:cilium.hubble.policy_verdicts_total{kube_cluster_name:$cluster,verdict:dropped,source_namespace:$src_ns}.as_count()",
                   "display_type": "area",
                   "style": { "palette": "red" }
                 }
@@ -606,7 +606,7 @@
                     {
                       "data_source": "metrics",
                       "name": "query1",
-                      "query": "sum:cilium.hubble.dns_responses_total{rcode:NoError,kube_cluster_name:$cluster}.as_count()",
+                      "query": "sum:cilium.hubble.dns_responses_total{rcode:No Error,kube_cluster_name:$cluster,source_namespace:$src_ns}.as_count()",
                       "aggregator": "sum"
                     },
                     {
@@ -669,7 +669,7 @@
               "title": "DNS Query Rate with Anomaly Detection",
               "requests": [
                 {
-                  "q": "anomalies(sum:cilium.hubble.dns_queries_total{kube_cluster_name:$cluster}.as_rate(), 'agile', 3)",
+                  "q": "anomalies(sum:cilium.hubble.dns_queries_total{kube_cluster_name:$cluster,source_namespace:$src_ns}.as_rate(), 'agile', 3)",
                   "display_type": "line",
                   "style": { "palette": "cool" }
                 }
