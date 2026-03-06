@@ -1,6 +1,6 @@
 {
-  "title": "Cilium Deep Insights (AKS / Fleet)",
-  "description": "Advanced Cilium dashboard for AKS fleets. Goes beyond the default integration page with: security posture scoring, anomaly detection, capacity planning, SLO tracking, and eBPF health. Uses correct metric names from the Datadog Cilium integration (OpenMetrics v2). NOTE: AKS-managed Cilium 1.17 - no hubble relay, no envoy L7 proxy, no clustermesh.",
+  "title": "Cilium Deep Insights v2 (AKS / Fleet)",
+  "description": "Advanced Cilium dashboard v2 for AKS fleets. Security posture scoring, anomaly detection, capacity planning, SLO tracking, and eBPF health. Uses correct metric names from the Datadog Cilium integration (OpenMetrics v2). NOTE: AKS-managed Cilium 1.17 - no envoy L7 proxy, no clustermesh. No Hubble metrics in this version.",
   "layout_type": "ordered",
   "restricted_roles": [],
   "template_variables": [
@@ -13,12 +13,6 @@
     {
       "name": "node",
       "prefix": "host",
-      "available_values": [],
-      "default": "*"
-    },
-    {
-      "name": "src_ns",
-      "prefix": "source_namespace",
       "available_values": [],
       "default": "*"
     }
@@ -34,10 +28,6 @@
         {
           "name": "node",
           "value": "*"
-        },
-        {
-          "name": "src_ns",
-          "value": "*"
         }
       ]
     },
@@ -51,10 +41,6 @@
         {
           "name": "node",
           "value": "*"
-        },
-        {
-          "name": "src_ns",
-          "value": "*"
         }
       ]
     }
@@ -63,7 +49,7 @@
     {
       "definition": {
         "type": "note",
-        "content": "## Cilium Deep Insights Dashboard\n\nThis dashboard goes beyond the default Cilium integration page. Set **$cluster** and optionally **$node** / **$src_ns** at the top.\n\n**Metric naming:** OpenMetrics V2. Agent metrics: `cilium.<name>.count`. Hubble metrics (openmetrics check with `namespace:cilium.hubble` + `raw_metric_prefix:hubble_`): `cilium.hubble.<name>.count`. If widgets show 'No data', verify helm values set `raw_metric_prefix: hubble_` on the hubble check.\n\n**Sections:** Security Posture \u2192 Agent/Operator Health \u2192 Drops & Network \u2192 Hubble Flows \u2192 DNS \u2192 TCP \u2192 eBPF Health \u2192 Policy \u2192 Capacity Planning \u2192 Kubernetes \u2192 Operator \u2192 Resources \u2192 Node Health (AKS)\n\n**AKS note:** No Envoy L7 proxy, no hubble relay (embedded in agent), no clustermesh. IPAM is Azure-delegated.\n\n**DNS rcode note:** Tag values depend on Cilium version. Verify with: `kubectl exec -n kube-system ds/cilium -- curl -s localhost:9965/metrics | grep dns_responses`",
+        "content": "## Cilium v2 — AKS Fleet\n\nUse **$cluster** / **$node** filters. OpenMetrics V2 naming: `cilium.<name>.count`.",
         "background_color": "vivid_blue",
         "font_size": "14",
         "text_align": "left",
@@ -192,80 +178,6 @@
           },
           {
             "definition": {
-              "type": "query_value",
-              "title": "Policy Denials (last timeframe)",
-              "requests": [
-                {
-                  "q": "sum:cilium.hubble.policy_verdicts.count{verdict:dropped,kube_cluster_name:$cluster,source_namespace:$src_ns}.as_count()",
-                  "aggregator": "sum",
-                  "conditional_formats": [
-                    {
-                      "comparator": "<=",
-                      "value": 0,
-                      "palette": "white_on_green"
-                    },
-                    {
-                      "comparator": "<=",
-                      "value": 50,
-                      "palette": "white_on_yellow"
-                    },
-                    {
-                      "comparator": ">",
-                      "value": 50,
-                      "palette": "white_on_red"
-                    }
-                  ]
-                }
-              ],
-              "precision": 0
-            }
-          },
-          {
-            "definition": {
-              "type": "timeseries",
-              "title": "Policy Denials with Anomaly Detection",
-              "requests": [
-                {
-                  "q": "anomalies(sum:cilium.hubble.policy_verdicts.count{verdict:dropped,kube_cluster_name:$cluster,source_namespace:$src_ns}.as_count(), 'agile', 3)",
-                  "display_type": "line",
-                  "style": {
-                    "palette": "warm",
-                    "line_type": "solid",
-                    "line_width": "normal"
-                  }
-                }
-              ]
-            }
-          },
-          {
-            "definition": {
-              "type": "change",
-              "title": "Policy Denials - Week over Week",
-              "requests": [
-                {
-                  "q": "sum:cilium.hubble.policy_verdicts.count{verdict:dropped,kube_cluster_name:$cluster,source_namespace:$src_ns}.as_count()",
-                  "change_type": "absolute",
-                  "compare_to": "week_before",
-                  "order_by": "change",
-                  "order_dir": "desc",
-                  "increase_good": false
-                }
-              ]
-            }
-          },
-          {
-            "definition": {
-              "type": "toplist",
-              "title": "Top Denied Namespaces",
-              "requests": [
-                {
-                  "q": "top(sum:cilium.hubble.policy_verdicts.count{verdict:dropped,kube_cluster_name:$cluster} by {source_namespace}.as_count(), 10, 'sum', 'desc')"
-                }
-              ]
-            }
-          },
-          {
-            "definition": {
               "type": "treemap",
               "title": "Drop Reasons Distribution",
               "requests": [
@@ -283,7 +195,7 @@
                       "aggregator": "sum"
                     }
                   ],
-                  "response_format": "timeseries"
+                  "response_format": "scalar"
                 }
               ]
             }
@@ -382,19 +294,6 @@
               "requests": [
                 {
                   "q": "max:cilium.policy.count{kube_cluster_name:$cluster}",
-                  "aggregator": "last"
-                }
-              ],
-              "precision": 0
-            }
-          },
-          {
-            "definition": {
-              "type": "query_value",
-              "title": "Identities",
-              "requests": [
-                {
-                  "q": "sum:cilium.identity.count{kube_cluster_name:$cluster}",
                   "aggregator": "last"
                 }
               ],
@@ -563,344 +462,6 @@
                 {
                   "q": "sum:cilium.forward_count.count{direction:egress,kube_cluster_name:$cluster,host:$node}.as_count()",
                   "display_type": "line"
-                }
-              ]
-            }
-          }
-        ]
-      }
-    },
-    {
-      "definition": {
-        "type": "group",
-        "title": "Hubble Flow Visibility",
-        "layout_type": "ordered",
-        "widgets": [
-          {
-            "definition": {
-              "type": "timeseries",
-              "title": "Flow Verdicts (forwarded / dropped / error)",
-              "requests": [
-                {
-                  "q": "sum:cilium.hubble.flows_processed.count{kube_cluster_name:$cluster,source_namespace:$src_ns} by {verdict}.as_count()",
-                  "display_type": "area",
-                  "style": {
-                    "palette": "dog_classic"
-                  }
-                }
-              ]
-            }
-          },
-          {
-            "definition": {
-              "type": "timeseries",
-              "title": "Flows to World (External) with Anomaly Band",
-              "requests": [
-                {
-                  "q": "anomalies(sum:cilium.hubble.flows_to_world.count{kube_cluster_name:$cluster}.as_rate(), 'robust', 2)",
-                  "display_type": "line",
-                  "style": {
-                    "palette": "orange"
-                  }
-                }
-              ]
-            }
-          },
-          {
-            "definition": {
-              "type": "timeseries",
-              "title": "Policy Verdicts: Forwarded vs Dropped",
-              "requests": [
-                {
-                  "q": "sum:cilium.hubble.policy_verdicts.count{kube_cluster_name:$cluster,verdict:forwarded,source_namespace:$src_ns}.as_count()",
-                  "display_type": "area",
-                  "style": {
-                    "palette": "green"
-                  }
-                },
-                {
-                  "q": "sum:cilium.hubble.policy_verdicts.count{kube_cluster_name:$cluster,verdict:dropped,source_namespace:$src_ns}.as_count()",
-                  "display_type": "area",
-                  "style": {
-                    "palette": "red"
-                  }
-                }
-              ]
-            }
-          },
-          {
-            "definition": {
-              "type": "timeseries",
-              "title": "Flows by Namespace (top 10)",
-              "requests": [
-                {
-                  "q": "top(sum:cilium.hubble.flows_processed.count{kube_cluster_name:$cluster} by {source_namespace}.as_count(), 10, 'sum', 'desc')",
-                  "display_type": "bars",
-                  "style": {
-                    "palette": "dog_classic"
-                  }
-                }
-              ]
-            }
-          },
-          {
-            "definition": {
-              "type": "timeseries",
-              "title": "Hubble Lost Events by Source",
-              "requests": [
-                {
-                  "q": "sum:cilium.hubble.lost_events.count{kube_cluster_name:$cluster} by {source}.as_count()",
-                  "display_type": "bars",
-                  "style": {
-                    "palette": "warm"
-                  }
-                }
-              ]
-            }
-          },
-          {
-            "definition": {
-              "type": "query_value",
-              "title": "Hubble Lost Events %",
-              "requests": [
-                {
-                  "formulas": [
-                    {
-                      "formula": "query1 / (query1 + query2) * 100",
-                      "conditional_formats": [
-                        {
-                          "comparator": "<=",
-                          "value": 0.1,
-                          "palette": "white_on_green"
-                        },
-                        {
-                          "comparator": "<=",
-                          "value": 1,
-                          "palette": "white_on_yellow"
-                        },
-                        {
-                          "comparator": ">",
-                          "value": 1,
-                          "palette": "white_on_red"
-                        }
-                      ]
-                    }
-                  ],
-                  "queries": [
-                    {
-                      "data_source": "metrics",
-                      "name": "query1",
-                      "query": "sum:cilium.hubble.lost_events.count{kube_cluster_name:$cluster}.as_count()",
-                      "aggregator": "sum"
-                    },
-                    {
-                      "data_source": "metrics",
-                      "name": "query2",
-                      "query": "sum:cilium.hubble.flows_processed.count{kube_cluster_name:$cluster}.as_count()",
-                      "aggregator": "sum"
-                    }
-                  ],
-                  "response_format": "scalar"
-                }
-              ],
-              "precision": 2,
-              "custom_unit": "%"
-            }
-          }
-        ]
-      }
-    },
-    {
-      "definition": {
-        "type": "group",
-        "title": "DNS Deep Analysis",
-        "layout_type": "ordered",
-        "widgets": [
-          {
-            "definition": {
-              "type": "query_value",
-              "title": "DNS Success Rate %",
-              "requests": [
-                {
-                  "formulas": [
-                    {
-                      "formula": "query1 / query2 * 100",
-                      "conditional_formats": [
-                        {
-                          "comparator": ">=",
-                          "value": 99,
-                          "palette": "white_on_green"
-                        },
-                        {
-                          "comparator": ">=",
-                          "value": 95,
-                          "palette": "white_on_yellow"
-                        },
-                        {
-                          "comparator": "<",
-                          "value": 95,
-                          "palette": "white_on_red"
-                        }
-                      ]
-                    }
-                  ],
-                  "queries": [
-                    {
-                      "data_source": "metrics",
-                      "name": "query1",
-                      "query": "sum:cilium.hubble.dns_responses.count{rcode:noerror,kube_cluster_name:$cluster,source_namespace:$src_ns}.as_count()",
-                      "aggregator": "sum"
-                    },
-                    {
-                      "data_source": "metrics",
-                      "name": "query2",
-                      "query": "sum:cilium.hubble.dns_responses.count{kube_cluster_name:$cluster}.as_count()",
-                      "aggregator": "sum"
-                    }
-                  ],
-                  "response_format": "scalar"
-                }
-              ],
-              "precision": 1,
-              "custom_unit": "%"
-            }
-          },
-          {
-            "definition": {
-              "type": "query_value",
-              "title": "NXDOMAIN Rate %",
-              "requests": [
-                {
-                  "formulas": [
-                    {
-                      "formula": "query1 / query2 * 100",
-                      "conditional_formats": [
-                        {
-                          "comparator": "<=",
-                          "value": 5,
-                          "palette": "white_on_green"
-                        },
-                        {
-                          "comparator": "<=",
-                          "value": 15,
-                          "palette": "white_on_yellow"
-                        },
-                        {
-                          "comparator": ">",
-                          "value": 15,
-                          "palette": "white_on_red"
-                        }
-                      ]
-                    }
-                  ],
-                  "queries": [
-                    {
-                      "data_source": "metrics",
-                      "name": "query1",
-                      "query": "sum:cilium.hubble.dns_responses.count{rcode:nxdomain,kube_cluster_name:$cluster}.as_count()",
-                      "aggregator": "sum"
-                    },
-                    {
-                      "data_source": "metrics",
-                      "name": "query2",
-                      "query": "sum:cilium.hubble.dns_responses.count{kube_cluster_name:$cluster}.as_count()",
-                      "aggregator": "sum"
-                    }
-                  ],
-                  "response_format": "scalar"
-                }
-              ],
-              "precision": 1,
-              "custom_unit": "%"
-            }
-          },
-          {
-            "definition": {
-              "type": "timeseries",
-              "title": "DNS Query Rate with Anomaly Detection",
-              "requests": [
-                {
-                  "q": "anomalies(sum:cilium.hubble.dns_queries.count{kube_cluster_name:$cluster,source_namespace:$src_ns}.as_rate(), 'agile', 3)",
-                  "display_type": "line",
-                  "style": {
-                    "palette": "cool"
-                  }
-                }
-              ]
-            }
-          },
-          {
-            "definition": {
-              "type": "timeseries",
-              "title": "DNS Responses by rcode",
-              "requests": [
-                {
-                  "q": "sum:cilium.hubble.dns_responses.count{kube_cluster_name:$cluster} by {rcode}.as_count()",
-                  "display_type": "bars",
-                  "style": {
-                    "palette": "dog_classic"
-                  }
-                }
-              ]
-            }
-          },
-          {
-            "definition": {
-              "type": "toplist",
-              "title": "Top NXDOMAIN Sources (by namespace)",
-              "requests": [
-                {
-                  "q": "top(sum:cilium.hubble.dns_responses.count{rcode:nxdomain,kube_cluster_name:$cluster} by {source_namespace}.as_count(), 10, 'sum', 'desc')"
-                }
-              ]
-            }
-          }
-        ]
-      }
-    },
-    {
-      "definition": {
-        "type": "group",
-        "title": "TCP",
-        "layout_type": "ordered",
-        "widgets": [
-          {
-            "definition": {
-              "type": "timeseries",
-              "title": "TCP Flags Distribution",
-              "requests": [
-                {
-                  "q": "sum:cilium.hubble.tcp_flags.count{kube_cluster_name:$cluster} by {flag}.as_count()",
-                  "display_type": "bars",
-                  "style": {
-                    "palette": "dog_classic"
-                  }
-                }
-              ]
-            }
-          },
-          {
-            "definition": {
-              "type": "timeseries",
-              "title": "TCP RST Rate (Connection Issues Indicator)",
-              "requests": [
-                {
-                  "q": "sum:cilium.hubble.tcp_flags.count{kube_cluster_name:$cluster,flag:RST}.as_rate()",
-                  "display_type": "line",
-                  "style": {
-                    "palette": "warm"
-                  }
-                }
-              ]
-            }
-          },
-          {
-            "definition": {
-              "type": "toplist",
-              "title": "Top 10 Destination Ports",
-              "requests": [
-                {
-                  "q": "top(sum:cilium.hubble.port_distribution.count{kube_cluster_name:$cluster} by {port}.as_count(), 10, 'sum', 'desc')"
                 }
               ]
             }
@@ -1382,86 +943,6 @@
     {
       "definition": {
         "type": "group",
-        "title": "Kubernetes Integration",
-        "layout_type": "ordered",
-        "widgets": [
-          {
-            "definition": {
-              "type": "timeseries",
-              "title": "K8s API Calls by Method",
-              "requests": [
-                {
-                  "q": "sum:cilium.k8s_client.api_calls.count{kube_cluster_name:$cluster} by {method}.as_count()",
-                  "display_type": "bars"
-                }
-              ]
-            }
-          },
-          {
-            "definition": {
-              "type": "timeseries",
-              "title": "K8s API Latency (avg)",
-              "requests": [
-                {
-                  "formulas": [
-                    {
-                      "formula": "query1 / query2",
-                      "alias": "Avg API Latency (s)"
-                    }
-                  ],
-                  "queries": [
-                    {
-                      "data_source": "metrics",
-                      "name": "query1",
-                      "query": "avg:cilium.k8s_client.api_latency_time.seconds.sum{kube_cluster_name:$cluster}",
-                      "aggregator": "avg"
-                    },
-                    {
-                      "data_source": "metrics",
-                      "name": "query2",
-                      "query": "avg:cilium.k8s_client.api_latency_time.seconds.count{kube_cluster_name:$cluster}",
-                      "aggregator": "avg"
-                    }
-                  ],
-                  "response_format": "timeseries",
-                  "display_type": "line"
-                }
-              ]
-            }
-          },
-          {
-            "definition": {
-              "type": "timeseries",
-              "title": "K8s API Errors from Cilium Agent",
-              "requests": [
-                {
-                  "q": "sum:cilium.k8s_client.api_calls.count{kube_cluster_name:$cluster,response_code:5*} by {method}.as_count()",
-                  "display_type": "bars",
-                  "style": {
-                    "palette": "warm"
-                  }
-                }
-              ]
-            }
-          },
-          {
-            "definition": {
-              "type": "timeseries",
-              "title": "Workqueue Depth",
-              "requests": [
-                {
-                  "q": "avg:cilium.k8s.workqueue.depth{kube_cluster_name:$cluster} by {name}",
-                  "display_type": "line"
-                }
-              ]
-            }
-          }
-        ]
-      }
-    },
-    {
-      "definition": {
-        "type": "group",
         "title": "Operator / Control-plane",
         "layout_type": "ordered",
         "widgets": [
@@ -1495,21 +976,6 @@
                 {
                   "q": "avg:cilium.operator.ipam.nodes{kube_cluster_name:$cluster} by {category}",
                   "display_type": "line"
-                }
-              ]
-            }
-          },
-          {
-            "definition": {
-              "type": "timeseries",
-              "title": "CES Sync Errors",
-              "requests": [
-                {
-                  "q": "sum:cilium.operator.ces.sync_errors.count{kube_cluster_name:$cluster}.as_count()",
-                  "display_type": "bars",
-                  "style": {
-                    "palette": "warm"
-                  }
                 }
               ]
             }
@@ -2087,7 +1553,7 @@
           {
             "definition": {
               "type": "timeseries",
-              "title": "K8s Workqueue Duration (p95)",
+              "title": "K8s Workqueue Duration (avg)",
               "requests": [
                 {
                   "q": "avg:cilium.k8s.workqueue.queue.duration.seconds.sum{kube_cluster_name:$cluster} by {name} / avg:cilium.k8s.workqueue.queue.duration.seconds.count{kube_cluster_name:$cluster} by {name}",
@@ -2723,215 +2189,6 @@
     {
       "definition": {
         "type": "group",
-        "title": "Hubble Deep Metrics",
-        "layout_type": "ordered",
-        "widgets": [
-          {
-            "definition": {
-              "type": "timeseries",
-              "title": "Hubble DNS Response Types",
-              "requests": [
-                {
-                  "q": "sum:cilium.hubble.dns_response_types.count{kube_cluster_name:$cluster} by {type}.as_count()",
-                  "display_type": "bars",
-                  "style": {
-                    "palette": "dog_classic",
-                    "line_type": "solid",
-                    "line_width": "normal"
-                  }
-                }
-              ],
-              "show_legend": true,
-              "legend_layout": "auto",
-              "legend_columns": [
-                "avg",
-                "min",
-                "max",
-                "value"
-              ]
-            }
-          },
-          {
-            "definition": {
-              "type": "timeseries",
-              "title": "Hubble TCP Flags Breakdown",
-              "requests": [
-                {
-                  "q": "sum:cilium.hubble.tcp_flags.count{kube_cluster_name:$cluster} by {flag}.as_count()",
-                  "display_type": "bars",
-                  "style": {
-                    "palette": "dog_classic",
-                    "line_type": "solid",
-                    "line_width": "normal"
-                  }
-                }
-              ],
-              "show_legend": true,
-              "legend_layout": "auto",
-              "legend_columns": [
-                "avg",
-                "min",
-                "max",
-                "value"
-              ]
-            }
-          },
-          {
-            "definition": {
-              "type": "timeseries",
-              "title": "Hubble Drops by Reason",
-              "requests": [
-                {
-                  "q": "sum:cilium.hubble.drop.count{kube_cluster_name:$cluster} by {reason}.as_count()",
-                  "display_type": "bars",
-                  "style": {
-                    "palette": "dog_classic",
-                    "line_type": "solid",
-                    "line_width": "normal"
-                  }
-                }
-              ],
-              "show_legend": true,
-              "legend_layout": "auto",
-              "legend_columns": [
-                "avg",
-                "min",
-                "max",
-                "value"
-              ]
-            }
-          },
-          {
-            "definition": {
-              "type": "timeseries",
-              "title": "Hubble Flows by Type & Verdict",
-              "requests": [
-                {
-                  "q": "sum:cilium.hubble.flows_processed.count{kube_cluster_name:$cluster} by {type,verdict}.as_count()",
-                  "display_type": "bars",
-                  "style": {
-                    "palette": "dog_classic",
-                    "line_type": "solid",
-                    "line_width": "normal"
-                  }
-                }
-              ],
-              "show_legend": true,
-              "legend_layout": "auto",
-              "legend_columns": [
-                "avg",
-                "min",
-                "max",
-                "value"
-              ]
-            }
-          },
-          {
-            "definition": {
-              "type": "timeseries",
-              "title": "Hubble Port Distribution",
-              "requests": [
-                {
-                  "q": "topk(10, sum:cilium.hubble.port_distribution.count{kube_cluster_name:$cluster} by {port,protocol}.as_count())",
-                  "display_type": "bars",
-                  "style": {
-                    "palette": "dog_classic",
-                    "line_type": "solid",
-                    "line_width": "normal"
-                  }
-                }
-              ],
-              "show_legend": true,
-              "legend_layout": "auto",
-              "legend_columns": [
-                "avg",
-                "min",
-                "max",
-                "value"
-              ]
-            }
-          },
-          {
-            "definition": {
-              "type": "timeseries",
-              "title": "Hubble Flows to World",
-              "requests": [
-                {
-                  "q": "sum:cilium.hubble.flows_to_world.count{kube_cluster_name:$cluster} by {protocol,verdict}.as_count()",
-                  "display_type": "bars",
-                  "style": {
-                    "palette": "dog_classic",
-                    "line_type": "solid",
-                    "line_width": "normal"
-                  }
-                }
-              ],
-              "show_legend": true,
-              "legend_layout": "auto",
-              "legend_columns": [
-                "avg",
-                "min",
-                "max",
-                "value"
-              ]
-            }
-          },
-          {
-            "definition": {
-              "type": "timeseries",
-              "title": "Hubble Policy Verdicts by Direction",
-              "requests": [
-                {
-                  "q": "sum:cilium.hubble.policy_verdicts.count{kube_cluster_name:$cluster} by {direction,action}.as_count()",
-                  "display_type": "bars",
-                  "style": {
-                    "palette": "dog_classic",
-                    "line_type": "solid",
-                    "line_width": "normal"
-                  }
-                }
-              ],
-              "show_legend": true,
-              "legend_layout": "auto",
-              "legend_columns": [
-                "avg",
-                "min",
-                "max",
-                "value"
-              ]
-            }
-          },
-          {
-            "definition": {
-              "type": "timeseries",
-              "title": "Hubble Lost Events by Source",
-              "requests": [
-                {
-                  "q": "sum:cilium.hubble.lost_events.count{kube_cluster_name:$cluster} by {source}.as_count()",
-                  "display_type": "bars",
-                  "style": {
-                    "palette": "dog_classic",
-                    "line_type": "solid",
-                    "line_width": "normal"
-                  }
-                }
-              ],
-              "show_legend": true,
-              "legend_layout": "auto",
-              "legend_columns": [
-                "avg",
-                "min",
-                "max",
-                "value"
-              ]
-            }
-          }
-        ]
-      }
-    },
-    {
-      "definition": {
-        "type": "group",
         "title": "Agent Internals",
         "layout_type": "ordered",
         "widgets": [
@@ -3448,6 +2705,21 @@
                 "min",
                 "max",
                 "value"
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "K8s API Errors from Cilium Agent",
+              "requests": [
+                {
+                  "q": "sum:cilium.k8s_client.api_calls.count{kube_cluster_name:$cluster,response_code:5*} by {method}.as_count()",
+                  "display_type": "bars",
+                  "style": {
+                    "palette": "warm"
+                  }
+                }
               ]
             }
           }
