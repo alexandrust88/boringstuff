@@ -8,7 +8,7 @@
       "name": "cluster",
       "prefix": "kube_cluster_name",
       "available_values": [],
-      "default": "cal-*"
+      "default": "cass-*"
     },
     {
       "name": "node",
@@ -25,11 +25,11 @@
   ],
   "template_variable_presets": [
     {
-      "name": "All CAL Clusters",
+      "name": "All CASS Clusters",
       "template_variables": [
         {
           "name": "cluster",
-          "value": "cal-*"
+          "value": "cass-*"
         },
         {
           "name": "node",

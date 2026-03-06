@@ -62,6 +62,13 @@ global:
     # Prevent privilege escalation
     allowPrivilegeEscalation: false
 
+    # NOTE: seccompProfile for sidecar proxies is NOT directly supported
+    # via global.proxy in the base chart. For sidecar seccomp, use:
+    # 1. Pod-level annotation: seccomp.security.alpha.kubernetes.io/pod
+    # 2. PodSecurityPolicy/PodSecurityStandard at namespace level
+    # 3. Istio 1.28+ supports seccompProfile in sidecar injection template
+    #    via meshConfig or IstioOperator
+
   # ============================================
   # Init Container Security Context
   # Used by istio-init when NOT using CNI plugin
