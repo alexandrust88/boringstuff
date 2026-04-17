@@ -1,0 +1,49 @@
+image:
+  report:
+    repository: registry.example.com/wwwz/report
+    tag: "0.1.0"
+  viewer:
+    repository: registry.example.com/dockerhub/library/nginx
+    tag: "1.27-alpine"
+
+imagePullSecrets:
+  - name: registry-pullsecret
+
+schedule: "0 2 * * *"
+
+hostname: "wwwz.example.com"
+tlsSecretName: "wwwz-tls"
+
+ingress:
+  enabled: true
+  className: "nginx"
+
+gateway:
+  enabled: false
+  parentRef:
+    name: "internal-gateway"
+    namespace: "gateway-system"
+
+vaultPath: "secret/wiz/api"
+
+vaultStore:
+  name: "vault-backend"
+  kind: "ClusterSecretStore"
+
+teamsWebhook:
+  enabled: false
+
+pvc:
+  size: "2Gi"
+  storageClass: ""
+
+# default credentials: admin / admin - CHANGE IN PRODUCTION
+# regenerate: htpasswd -nbB admin <password>
+htpasswd: "admin:$2y$05$GTMqE5ZVZv2UMdaNQXPMX.jGkYBB5JUrKtRCGa/CD4DK.X38r8I3e"
+
+clusterFilter: ""
+maxClusters: 0
+
+wiz:
+  authUrl: "https://auth.app.wiz.io/oauth/token"
+  apiUrl: "https://api.eu18.app.wiz.io/graphql"

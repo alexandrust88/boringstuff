@@ -1,0 +1,6 @@
+# keep only what the Dockerfile needs
+**
+!src
+src/**
+!src/wiz_report.py
+!src/requirements.txt
