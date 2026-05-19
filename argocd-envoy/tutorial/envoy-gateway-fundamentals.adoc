@@ -1,0 +1,2602 @@
+= Envoy Gateway Fundamentals (Consolidated)
+:doctype: book
+:toc: left
+:toclevels: 3
+:sectnums:
+:sectnumlevels: 3
+:icons: font
+:source-highlighter: rouge
+:experimental:
+:eg-version: 1.1.0
+
+[abstract]
+== About this document
+
+This is a consolidated, single-file version of Tetrate's *Envoy Gateway
+Fundamentals* course. It merges the original mkdocs site (`docs/*.md`),
+every supporting Kubernetes manifest in `artifacts/`, and the shell helpers
+into one asciidoc document, with an added *Envoy Gateway Debugging &
+Operations* appendix at the end.
+
+The course pins to *Envoy Gateway v{eg-version}* and uses the stable channel
+of *Gateway API v1.1.x*. Everything is self-service on a local k3d cluster
+— no cloud account required.
+
+[NOTE]
+====
+Original layout:
+
+[source,text]
+----
+eg-course/
+├── mkdocs.yml                # site config
+├── README.md
+├── docs/                     # walkthrough content
+│   ├── index.md              # intro
+│   ├── setup.md              # cluster + EG install
+│   ├── getting-started.md    # first Gateway + HTTPRoute
+│   ├── shared-gw.md          # multi-tenant shared gateway
+│   ├── https.md              # cert-manager + TLS termination
+│   ├── policy-attachments.md # timeouts + BackendTrafficPolicy retries
+│   ├── ratelimit.md          # global rate limiting with Redis
+│   ├── basic-auth.md         # SecurityPolicy / basic auth
+│   ├── ext-authz.md          # SecurityPolicy / external authz
+│   ├── oidc.md               # SecurityPolicy / OIDC with Okta
+│   ├── traffic-split.md      # weighted canaries
+│   ├── wasm.md               # EnvoyExtensionPolicy / Wasm
+│   ├── observability.md      # Prometheus + Grafana
+│   └── takeaways.md
+└── artifacts/                # every manifest referenced above
+----
+====
+
+== Introduction
+
+This content is the companion to Tetrate's Envoy Gateway course, originally
+published on https://academy.tetrate.io/[Tetrate Academy] in November 2024.
+
+The course is hands-on: every section has one or more `kubectl apply`
+commands against YAML manifests, interspersed with verification steps that
+use `curl`, `egctl`, and Envoy's admin interface.
+
+== Installation and setup
+
+=== Provision a local cluster
+
+The helper below creates a k3d cluster with Traefik disabled (Envoy
+Gateway takes over as the ingress) and both port 80 and 443 exposed to the
+host.
+
+.`artifacts/setup/make-local-k3d-cluster`
+[source,bash]
+----
+#!/bin/sh
+
+k3d cluster create my-k8s-cluster \
+  --k3s-arg "--disable=traefik@server:0" \
+  --port 80:80@loadbalancer \
+  --port 443:443@loadbalancer
+----
+
+[source,bash]
+----
+./setup/make-local-k3d-cluster
+----
+
+Reference: https://k3d.io/[k3d].
+
+=== Install Envoy Gateway
+
+[source,bash]
+----
+helm install eg oci://docker.io/envoyproxy/gateway-helm \
+  --version v{eg-version} \
+  -n envoy-gateway-system --create-namespace
+----
+
+=== Define a GatewayClass
+
+A `GatewayClass` tells Kubernetes which controller should handle
+`Gateway` resources that reference it. Envoy Gateway ships a controller
+named `gateway.envoyproxy.io/gatewayclass-controller`.
+
+.`artifacts/setup/gateway-class.yaml`
+[source,yaml]
+----
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: eg
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+----
+
+[source,bash]
+----
+kubectl apply -f setup/gateway-class.yaml
+----
+
+=== Install the `egctl` CLI
+
+Envoy Gateway ships its own CLI, `egctl`, which we use throughout the
+rest of the course to inspect the translated Envoy configuration.
+
+Install options:
+
+* From the published binary releases (per platform).
+* Via install script.
+* On macOS, via Homebrew.
+
+Detailed instructions:
+https://gateway.envoyproxy.io/docs/install/install-egctl/[Install egctl].
+
+== Getting started — a first Gateway and route
+
+=== Deploy the `httpbin` workload
+
+We use https://httpbin.org/[httpbin] as our first backend — a well-known
+"simple HTTP request & response service."
+
+.`artifacts/apps/httpbin.yaml`
+[source,yaml]
+----
+# Copyright Istio Authors
+#
+#   Licensed under the Apache License, Version 2.0 (the "License");
+#   you may not use this file except in compliance with the License.
+#   You may obtain a copy of the License at
+#
+#       http://www.apache.org/licenses/LICENSE-2.0
+
+##################################################################################################
+# httpbin service
+##################################################################################################
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: httpbin
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: httpbin
+  labels:
+    app: httpbin
+    service: httpbin
+spec:
+  ports:
+  - name: http
+    port: 8000
+    targetPort: 8080
+  selector:
+    app: httpbin
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: httpbin
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: httpbin
+      version: v1
+  template:
+    metadata:
+      labels:
+        app: httpbin
+        version: v1
+    spec:
+      serviceAccountName: httpbin
+      containers:
+      - image: docker.io/kong/httpbin
+        imagePullPolicy: IfNotPresent
+        name: httpbin
+        # Same as found in Dockerfile's CMD but using an unprivileged port
+        command:
+        - gunicorn
+        - -b
+        - 0.0.0.0:8080
+        - httpbin:app
+        - -k
+        - gevent
+        env:
+        # Tells pipenv to use a writable directory instead of $HOME
+        - name: WORKON_HOME
+          value: /tmp
+        ports:
+        - containerPort: 8080
+----
+
+[source,bash]
+----
+kubectl apply -f apps/httpbin.yaml
+----
+
+=== Deploy a Gateway
+
+.`artifacts/getting-started/gateway-http.yaml`
+[source,yaml]
+----
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: eg
+spec:
+  gatewayClassName: eg
+  listeners:
+  - name: http
+    protocol: HTTP
+    port: 80
+----
+
+[source,bash]
+----
+kubectl apply -f getting-started/gateway-http.yaml
+kubectl wait gtw/eg --for=condition=Programmed
+
+# egctl can display the status of gateways:
+egctl x status gateway -v
+----
+
+=== Confirm the gateway is reachable (and returns 404)
+
+[source,bash]
+----
+export GATEWAY_IP=$(kubectl get gtw eg -o jsonpath='{.status.addresses[0].value}')
+
+# When using a local k3d cluster, the loopback address is usually the gateway IP:
+# export GATEWAY_IP=127.0.0.1
+
+curl -v http://$GATEWAY_IP/
+----
+
+[source,console]
+----
+*   Trying 34.121.222.176:80...
+* Connected to 34.121.222.176 (34.121.222.176) port 80
+> GET / HTTP/1.1
+> Host: 34.121.222.176
+> User-Agent: curl/8.7.1
+> Accept: */*
+>
+* Request completely sent off
+< HTTP/1.1 404 Not Found
+< date: Tue, 07 May 2024 23:39:35 GMT
+< content-length: 0
+<
+* Connection #0 to host 34.121.222.176 left intact
+----
+
+404 is expected — we have a gateway, but no route yet.
+
+=== Define an HTTPRoute to `httpbin`
+
+.`artifacts/getting-started/httpbin-route.yaml`
+[source,yaml]
+----
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: httpbin
+spec:
+  hostnames:
+  - httpbin.example.com
+  parentRefs:
+  - name: eg
+  rules:
+  - backendRefs:
+    - name: httpbin
+      port: 8000
+----
+
+[source,bash]
+----
+kubectl apply -f getting-started/httpbin-route.yaml
+
+# Use --resolve instead of DNS:
+curl http://httpbin.example.com/json --resolve httpbin.example.com:80:$GATEWAY_IP
+----
+
+=== Clean up before the next section
+
+[source,bash]
+----
+kubectl delete httproute httpbin
+kubectl delete gtw eg
+kubectl delete -f apps/httpbin.yaml
+----
+
+== Shared Gateways — multi-tenant self-service
+
+One of the strongest arguments for Gateway API is the persona split: the
+platform team owns the `Gateway`, application teams own their own
+`HTTPRoute` objects.
+
+=== Design and conventions
+
+The platform team deploys the gateway in the `infra` namespace. An
+application namespace labeled `self-serve-ingress: "true"` is granted
+permission to attach routes to the shared gateway.
+
+=== Deploy the shared Gateway
+
+.`artifacts/shared-gw/gateway-http.yaml`
+[source,yaml]
+----
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: eg
+  namespace: infra
+spec:
+  gatewayClassName: eg
+  listeners:
+  - name: http
+    protocol: HTTP
+    port: 80
+    allowedRoutes:
+      namespaces:
+        from: Selector
+        selector:
+          matchLabels:
+            self-serve-ingress: "true"
+----
+
+[source,bash]
+----
+kubectl create ns infra
+kubectl apply -f shared-gw/gateway-http.yaml
+kubectl wait gtw/eg -n infra --for=condition=Programmed
+export GATEWAY_IP=$(kubectl get gtw eg -n infra -o jsonpath='{.status.addresses[0].value}')
+----
+
+=== Deploy the tenant workloads
+
+==== `httpbin`
+
+[source,bash]
+----
+kubectl create ns httpbin
+kubectl label  ns httpbin self-serve-ingress="true"
+kubectl apply -f apps/httpbin.yaml -n httpbin
+----
+
+==== `customers` (two-tier app: `customers` backend + `web-frontend` UI)
+
+.`artifacts/apps/customers.yaml`
+[source,yaml]
+----
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: customers
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: customers-v1
+  labels:
+    app: customers
+    version: v1
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: customers
+      version: v1
+  template:
+    metadata:
+      labels:
+        app: customers
+        version: v1
+    spec:
+      serviceAccountName: customers
+      containers:
+      - image: gcr.io/tetratelabs/customers:1.0.0
+        imagePullPolicy: Always
+        name: svc
+        ports:
+        - containerPort: 3000
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: customers
+  labels:
+    app: customers
+spec:
+  selector:
+    app: customers
+  ports:
+  - port: 80
+    name: http
+    targetPort: 3000
+----
+
+.`artifacts/apps/web-frontend.yaml`
+[source,yaml]
+----
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: web-frontend
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-frontend
+  labels:
+    app: web-frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: web-frontend
+  template:
+    metadata:
+      labels:
+        app: web-frontend
+        version: v1
+    spec:
+      serviceAccountName: web-frontend
+      containers:
+      - name: web
+        image: gcr.io/tetratelabs/web-frontend:1.0.0
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+        env:
+        - name: CUSTOMER_SERVICE_URL
+          value: "http://customers"
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: web-frontend
+  labels:
+    app: web-frontend
+spec:
+  selector:
+    app: web-frontend
+  ports:
+  - port: 80
+    name: http
+    targetPort: 8080
+----
+
+[source,bash]
+----
+kubectl create ns customers
+kubectl label  ns customers self-serve-ingress="true"
+kubectl apply -f apps/customers.yaml    -n customers
+kubectl apply -f apps/web-frontend.yaml -n customers
+----
+
+=== Configure the routes
+
+.`artifacts/shared-gw/httpbin-route.yaml`
+[source,yaml]
+----
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: httpbin
+  namespace: httpbin
+spec:
+  hostnames:
+  - httpbin.example.com
+  parentRefs:
+  - name: eg
+    namespace: infra
+  rules:
+  - backendRefs:
+    - name: httpbin
+      port: 8000
+----
+
+.`artifacts/shared-gw/web-frontend-route.yaml`
+[source,yaml]
+----
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: web-frontend
+  namespace: customers
+spec:
+  hostnames:
+  - customers-frontend.example.com
+  parentRefs:
+  - name: eg
+    namespace: infra
+  rules:
+  - backendRefs:
+    - name: web-frontend
+      port: 80
+----
+
+[source,bash]
+----
+kubectl apply -f shared-gw/httpbin-route.yaml
+kubectl apply -f shared-gw/web-frontend-route.yaml
+----
+
+=== Inspect the translated config
+
+[source,bash]
+----
+kubectl get -n infra gtw eg -o yaml    # confirm 2 attached routes per listener
+
+egctl config envoy-proxy route -n envoy-gateway-system \
+  -l gateway.envoyproxy.io/owning-gateway-name=eg \
+  -l gateway.envoyproxy.io/owning-gateway-namespace=infra \
+  -o yaml
+----
+
+Expected output (lightly sanitized):
+
+[source,yaml]
+----
+envoy-gateway-system:
+  envoy-infra-eg-eade8e06-84c7dd49d-rwdpk:
+    dynamicRouteConfigs:
+    - routeConfig:
+        name: infra/eg/http
+        virtualHosts:
+        - domains:
+          - httpbin.example.com
+          name: infra/eg/http/httpbin_example_com
+          routes:
+          - match:
+              prefix: /
+            name: httproute/httpbin/httpbin/rule/0/match/0/httpbin_example_com
+            route:
+              cluster: httproute/httpbin/httpbin/rule/0
+        - domains:
+          - customers-frontend.example.com
+          name: infra/eg/http/customers-frontend_example_com
+          routes:
+          - match:
+              prefix: /
+            name: httproute/customers/web-frontend/rule/0/match/0/customers-frontend_example_com
+            route:
+              cluster: httproute/customers/web-frontend/rule/0
+----
+
+=== Verify end-to-end
+
+[source,bash]
+----
+curl http://httpbin.example.com/json \
+  --resolve httpbin.example.com:80:$GATEWAY_IP
+
+curl http://customers-frontend.example.com/ \
+  --resolve customers-frontend.example.com:80:$GATEWAY_IP
+----
+
+== HTTPS — TLS termination via cert-manager
+
+=== Design decisions
+
+* All application traffic is served over HTTPS.
+* HTTP requests are automatically redirected to HTTPS.
+* Application teams cannot define routes over HTTP — only platform can.
+* The platform team manages TLS termination.
+* App teams continue to self-service routes against the shared gateway.
+
+We use https://cert-manager.io/docs/[cert-manager] to mint and rotate certs.
+
+=== Install cert-manager
+
+[source,bash]
+----
+helm repo add jetstack https://charts.jetstack.io --force-update
+helm repo update
+
+helm upgrade --install --create-namespace --namespace cert-manager \
+  --set crds.enabled=true \
+  --set "extraArgs={--enable-gateway-api}" \
+  cert-manager jetstack/cert-manager
+----
+
+=== Self-signed ClusterIssuer
+
+.`artifacts/https/selfsigned-issuer.yaml`
+[source,yaml]
+----
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: self-signed
+spec:
+  selfSigned: {}
+----
+
+[source,bash]
+----
+kubectl apply -f https/selfsigned-issuer.yaml
+----
+
+=== Update the Gateway to add HTTPS listeners
+
+.`artifacts/https/gateway-add-https.yaml`
+[source,yaml]
+----
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: eg
+  namespace: infra
+  annotations:
+    cert-manager.io/cluster-issuer: self-signed
+spec:
+  gatewayClassName: eg
+  listeners:
+  - name: http
+    protocol: HTTP
+    port: 80
+    allowedRoutes:
+      namespaces:
+        from: Same
+  - name: https-httpbin
+    protocol: HTTPS
+    port: 443
+    hostname: httpbin.example.com
+    tls:
+      mode: Terminate
+      certificateRefs:
+      - name: httpbin-cert
+    allowedRoutes:
+      namespaces:
+        from: Selector
+        selector:
+          matchLabels:
+            self-serve-ingress: "true"
+  - name: https-customers
+    protocol: HTTPS
+    port: 443
+    hostname: customers-frontend.example.com
+    tls:
+      mode: Terminate
+      certificateRefs:
+      - name: customers-cert
+    allowedRoutes:
+      namespaces:
+        from: Selector
+        selector:
+          matchLabels:
+            self-serve-ingress: "true"
+----
+
+Key things to notice:
+
+* The HTTP listener is now restricted to `from: Same` — only the platform team's `infra` namespace can attach routes to it.
+* The two HTTPS listeners each have their own hostname and cert.
+* The `cert-manager.io/cluster-issuer` annotation drives cert issuance into the named `Secret` (e.g. `httpbin-cert`).
+
+[source,bash]
+----
+kubectl apply -f https/gateway-add-https.yaml
+----
+
+=== Test HTTPS
+
+[source,bash]
+----
+# Verbose HEAD — shows TLS handshake
+curl --insecure -v --head https://httpbin.example.com/ \
+  --resolve httpbin.example.com:443:$GATEWAY_IP
+
+# JSON endpoint over HTTPS
+curl --insecure https://httpbin.example.com/json \
+  --resolve httpbin.example.com:443:$GATEWAY_IP
+----
+
+=== Redirect HTTP → HTTPS
+
+Only the platform team has permission to attach routes to the HTTP
+listener, so they own this redirect policy.
+
+.`artifacts/https/httpbin-to-https.yaml`
+[source,yaml]
+----
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: httpbin-redirect-to-https
+  namespace: infra
+spec:
+  hostnames:
+  - "*.example.com"
+  parentRefs:
+  - name: eg
+    sectionName: http
+  rules:
+  - filters:
+    - type: RequestRedirect
+      requestRedirect:
+        scheme: https
+        statusCode: 301
+----
+
+[source,bash]
+----
+kubectl apply -f https/httpbin-to-https.yaml
+
+curl -v http://httpbin.example.com/ \
+  --resolve httpbin.example.com:80:$GATEWAY_IP
+----
+
+Expect `HTTP/1.1 301 Moved Permanently` and `location: https://httpbin.example.com:443/`.
+
+== Policy attachments — timeouts and retries
+
+Retries and timeouts illustrate two extension patterns:
+
+* *Timeouts* are part of the Gateway API spec, so you set them directly on the `HTTPRoute`.
+* *Retries* aren't (yet) in the spec, so Envoy Gateway exposes them via a `BackendTrafficPolicy` attached to a route.
+
+=== Timeouts (on the HTTPRoute itself)
+
+.`artifacts/policy-attachments/httpbin-route.yaml`
+[source,yaml]
+----
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: httpbin
+  namespace: httpbin
+spec:
+  hostnames:
+  - httpbin.example.com
+  parentRefs:
+  - name: eg
+    namespace: infra
+  rules:
+  - backendRefs:
+    - name: httpbin
+      port: 8000
+    timeouts:
+      request: 1s
+----
+
+Trigger the timeout with the `/delay/2` endpoint:
+
+[source,bash]
+----
+# Succeeds (fast response)
+curl --insecure https://httpbin.example.com/json \
+  --resolve httpbin.example.com:443:$GATEWAY_IP
+
+# Times out with "upstream request timeout" (504)
+curl --insecure https://httpbin.example.com/delay/2 \
+  --resolve httpbin.example.com:443:$GATEWAY_IP
+----
+
+=== Gateway-related CRDs
+
+[source,bash]
+----
+kubectl api-resources | grep gateway
+----
+
+[source,console]
+----
+gateway.envoyproxy.io/v1alpha1       Backend
+gateway.envoyproxy.io/v1alpha1       BackendTrafficPolicy
+gateway.envoyproxy.io/v1alpha1       ClientTrafficPolicy
+gateway.envoyproxy.io/v1alpha1       EnvoyExtensionPolicy
+gateway.envoyproxy.io/v1alpha1       EnvoyPatchPolicy
+gateway.envoyproxy.io/v1alpha1       EnvoyProxy
+gateway.envoyproxy.io/v1alpha1       SecurityPolicy
+gateway.networking.k8s.io/v1alpha2   BackendLBPolicy
+gateway.networking.k8s.io/v1alpha3   BackendTLSPolicy
+gateway.networking.k8s.io/v1         GatewayClass
+gateway.networking.k8s.io/v1         Gateway
+gateway.networking.k8s.io/v1         GRPCRoute
+gateway.networking.k8s.io/v1         HTTPRoute
+gateway.networking.k8s.io/v1beta1    ReferenceGrant
+gateway.networking.k8s.io/v1alpha2   TCPRoute
+gateway.networking.k8s.io/v1alpha2   TLSRoute
+gateway.networking.k8s.io/v1alpha2   UDPRoute
+----
+
+The `gateway.envoyproxy.io/v1alpha1` group is the Envoy Gateway extension
+surface, providing the `*Policy` and `EnvoyProxy` CRDs.
+
+=== Retries via BackendTrafficPolicy
+
+.`artifacts/policy-attachments/httpbin-policy.yaml`
+[source,yaml]
+----
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: httpbin-traffic-policy
+  namespace: httpbin
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: httpbin
+  retry:
+    numRetries: 5
+    perRetry:
+      backOff:
+        baseInterval: 100ms
+        maxInterval: 10s
+      timeout: 250ms
+    retryOn:
+      httpStatusCodes:
+      - 500
+      triggers:
+      - connect-failure
+      - retriable-status-codes
+----
+
+[source,bash]
+----
+kubectl apply -f policy-attachments/httpbin-policy.yaml
+----
+
+=== Verify: inspect the translated route
+
+[source,bash]
+----
+egctl config envoy-proxy route -n envoy-gateway-system \
+  -l gateway.envoyproxy.io/owning-gateway-name=eg \
+  -l gateway.envoyproxy.io/owning-gateway-namespace=infra \
+  -o yaml | bat -l yaml
+----
+
+[source,yaml]
+----
+envoy-gateway-system:
+  envoy-infra-eg-eade8e06-5f9f47c8bf-gwh4g:
+    dynamicRouteConfigs:
+    - routeConfig:
+        name: infra/eg/https-httpbin
+        virtualHosts:
+        - domains:
+          - httpbin.example.com
+          routes:
+          - match:
+              prefix: /
+            route:
+              cluster: httproute/httpbin/httpbin/rule/0
+              retryPolicy:
+                hostSelectionRetryMaxAttempts: "5"
+                numRetries: 5
+                perTryTimeout: 0.250s
+                retriableStatusCodes:
+                - 500
+                retryBackOff:
+                  baseInterval: 0.100s
+                  maxInterval: 10s
+                retryHostPredicate:
+                - name: envoy.retry_host_predicates.previous_hosts
+                retryOn: connect-failure,retriable-status-codes
+----
+
+=== Verify: watch retry stats and tail the access log
+
+[source,bash]
+----
+# Watch the retry counter
+watch 'egctl x stats envoy-proxy -n envoy-gateway-system \
+  -l gateway.envoyproxy.io/owning-gateway-name=eg \
+  -l gateway.envoyproxy.io/owning-gateway-namespace=infra \
+  | grep "envoy_cluster_upstream_rq_retry{envoy_cluster_name=\"httproute/httpbin/httpbin/rule/0\"}"'
+
+# In another terminal: hit a failing endpoint
+curl --insecure --head https://httpbin.example.com/status/500 \
+  --resolve httpbin.example.com:443:$GATEWAY_IP
+
+# Ad-hoc Envoy admin dashboard
+egctl x dashboard envoy-proxy -n envoy-gateway-system \
+  -l gateway.envoyproxy.io/owning-gateway-name=eg \
+  -l gateway.envoyproxy.io/owning-gateway-namespace=infra
+----
+
+Access log line after retries exhaust:
+
+[source,json]
+----
+{
+  "method": "HEAD",
+  "x-envoy-origin-path": "/status/500",
+  "response_code": "500",
+  "response_flags": "URX",
+  "response_code_details": "via_upstream",
+  "upstream_cluster": "httproute/httpbin/httpbin/rule/0",
+  "route_name": "httproute/httpbin/httpbin/rule/0/match/0/httpbin_example_com"
+}
+----
+
+`URX` = `UpstreamRetryLimitExceeded`.
+
+== Rate limiting
+
+Rate limiting is *not* part of the Gateway API spec. Envoy Gateway
+provides it via `BackendTrafficPolicy` with a `rateLimit` block, backed by
+Envoy's
+https://www.envoyproxy.io/docs/envoy/v1.31.0/intro/arch_overview/other_features/global_rate_limiting.html[Global Rate Limiting]
+feature — which in turn requires Redis for counter storage.
+
+=== Prereqs
+
+. Deploy Redis (see https://gateway.envoyproxy.io/docs/tasks/traffic/global-rate-limit/#prerequisites[EG docs]).
+. Update the `envoy-gateway-config` ConfigMap with the Redis URL.
+. Restart the `envoy-gateway` deployment.
+
+=== Simple: 3 requests per minute, across all clients
+
+.`artifacts/ratelimit/simple.yaml`
+[source,yaml]
+----
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: httpbin-traffic-policy
+  namespace: httpbin
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: httpbin
+  rateLimit:
+    type: Global
+    global:
+      rules:
+      - limit:
+          requests: 3
+          unit: Minute
+----
+
+[source,bash]
+----
+kubectl apply -f ratelimit/simple.yaml
+
+for i in {1..4}; do
+  curl --insecure --head https://httpbin.example.com/ \
+    --resolve httpbin.example.com:443:$GATEWAY_IP
+done
+----
+
+Expected output: three 200s with decreasing `x-ratelimit-remaining`, then one 429:
+
+[source,console]
+----
+HTTP/2 200
+x-ratelimit-limit: 3, 3;w=60
+x-ratelimit-remaining: 2
+x-ratelimit-reset: 48
+
+HTTP/2 200
+x-ratelimit-remaining: 1
+
+HTTP/2 200
+x-ratelimit-remaining: 0
+
+HTTP/2 429
+x-envoy-ratelimited: true
+x-ratelimit-limit: 3, 3;w=60
+x-ratelimit-remaining: 0
+----
+
+Access log for a rate-limited request has `response_flags: RL`
+(RateLimited) and `response_code_details: request_rate_limited`.
+
+=== Per-user limits via Distinct header match
+
+.`artifacts/ratelimit/distinct-users.yaml`
+[source,yaml]
+----
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: httpbin-traffic-policy
+  namespace: httpbin
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: httpbin
+  rateLimit:
+    type: Global
+    global:
+      rules:
+      - clientSelectors:
+        - headers:
+          - type: Distinct
+            name: x-user-id
+        limit:
+          requests: 3
+          unit: Minute
+----
+
+[source,bash]
+----
+kubectl apply -f ratelimit/distinct-users.yaml
+
+for i in {1..4}; do
+  curl --insecure --head -H "x-user-id: eitan" https://httpbin.example.com/ \
+    --resolve httpbin.example.com:443:$GATEWAY_IP
+done
+
+# A different user has an independent counter:
+for i in {1..4}; do
+  curl --insecure --head -H "x-user-id: johndoe" https://httpbin.example.com/ \
+    --resolve httpbin.example.com:443:$GATEWAY_IP
+done
+----
+
+The translated Envoy route picks up a `rateLimits.actions` block referencing `x-user-id`:
+
+[source,yaml]
+----
+routes:
+- match:
+    prefix: /
+  route:
+    cluster: httproute/httpbin/httpbin/rule/0
+    rateLimits:
+    - actions:
+      - genericKey:
+          descriptorKey: httproute/httpbin/httpbin/rule/0/match/0/httpbin_example_com
+          descriptorValue: httproute/httpbin/httpbin/rule/0/match/0/httpbin_example_com
+      - requestHeaders:
+          descriptorKey: rule-0-match-0
+          headerName: x-user-id
+----
+
+== Security: Basic Authentication
+
+Envoy Gateway's `SecurityPolicy` supports JWT, OIDC, extAuth, CORS, and
+basicAuth. Basic auth is the simplest — it takes a `Secret` containing an
+htpasswd file.
+
+.`artifacts/basic-auth/auth-config.yaml`
+[source,yaml]
+----
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: httpbin-basicauth
+  namespace: httpbin
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: httpbin
+  basicAuth:
+    users:
+      name: httpbin-users
+----
+
+=== Apply
+
+[source,bash]
+----
+# 1. Generate the htpasswd file (will prompt for a password)
+htpasswd -cs .htpasswd eitan
+
+# 2. Create the secret
+kubectl create secret generic -n httpbin httpbin-users --from-file=.htpasswd
+
+# 3. Apply the policy
+kubectl apply -f basic-auth/auth-config.yaml
+----
+
+=== Test
+
+[source,bash]
+----
+# 1. No credentials -> 401
+curl --insecure --head https://httpbin.example.com/ \
+  --resolve httpbin.example.com:443:$GATEWAY_IP
+
+# 2. Correct credentials -> 200
+curl --insecure --head --user eitan:correctpassword https://httpbin.example.com/ \
+  --resolve httpbin.example.com:443:$GATEWAY_IP
+
+# 3. Wrong password -> 401
+curl --insecure --head --user eitan:wrongpassword https://httpbin.example.com/ \
+  --resolve httpbin.example.com:443:$GATEWAY_IP
+----
+
+=== Where the filter lives in the Envoy config
+
+The `basic_auth` filter is declared on the listener but *disabled* there,
+and enabled per-route via `typedPerFilterConfig`:
+
+[source,bash]
+----
+egctl config envoy-proxy listener -n envoy-gateway-system \
+  -l gateway.envoyproxy.io/owning-gateway-name=eg \
+  -l gateway.envoyproxy.io/owning-gateway-namespace=infra \
+  -o yaml | bat -l yaml
+----
+
+[source,yaml]
+----
+filterChains:
+- filterChainMatch:
+    serverNames:
+    - httpbin.example.com
+  filters:
+  - name: envoy.filters.network.http_connection_manager
+    typedConfig:
+      httpFilters:
+      - name: envoy.filters.http.basic_auth
+        disabled: true
+        typedConfig:
+          '@type': type.googleapis.com/envoy.extensions.filters.http.basic_auth.v3.BasicAuth
+          users:
+            inlineBytes: W3JlZGFjdGVkXQ==
+----
+
+[source,yaml]
+----
+# Route layer enables it:
+routes:
+- match:
+    prefix: /
+  route:
+    cluster: httproute/httpbin/httpbin/rule/0
+  typedPerFilterConfig:
+    envoy.filters.http.basic_auth:
+      '@type': type.googleapis.com/envoy.extensions.filters.http.basic_auth.v3.BasicAuthPerRoute
+      users:
+        inlineBytes: W3JlZGFjdGVkXQ==
+----
+
+== Security: External Authorization (ext_authz)
+
+The `ext-authz` sample service (from Istio's upstream samples) accepts
+any request with header `x-ext-authz: allow` and rejects the rest.
+
+.`artifacts/ext-authz/ext-authz.yaml`
+[source,yaml]
+----
+# Copyright Istio Authors
+# Example configurations for deploying ext-authz server separately in the mesh.
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: ext-authz
+  labels:
+    app: ext-authz
+spec:
+  ports:
+  - name: http
+    port: 8000
+    targetPort: 8000
+  - name: grpc
+    port: 9000
+    targetPort: 9000
+  selector:
+    app: ext-authz
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ext-authz
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ext-authz
+  template:
+    metadata:
+      labels:
+        app: ext-authz
+    spec:
+      containers:
+      - image: gcr.io/istio-testing/ext-authz:latest
+        imagePullPolicy: IfNotPresent
+        name: ext-authz
+        ports:
+        - containerPort: 8000
+        - containerPort: 9000
+----
+
+.`artifacts/ext-authz/security-policy.yaml`
+[source,yaml]
+----
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: ext-authz-policy
+  namespace: httpbin
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: httpbin
+  extAuth:
+    http:
+      backendRefs:
+      - group: ""
+        kind: Service
+        name: ext-authz
+        port: 8000
+    headersToExtAuth:
+    - x-ext-authz
+----
+
+[source,bash]
+----
+kubectl apply -f ext-authz/ext-authz.yaml -n httpbin
+kubectl apply -f ext-authz/security-policy.yaml
+
+# Allowed:
+curl -v -H "x-ext-authz: allow" http://httpbin.example.com/json \
+  --resolve httpbin.example.com:80:$GATEWAY_IP
+
+# Absence of header or wrong value -> 403
+----
+
+=== Cross-namespace backend: `ReferenceGrant`
+
+If `ext-authz` lived in a different namespace (say `default`), the
+`SecurityPolicy` would need a `namespace` on the `backendRef`, and the
+*target* namespace owner would have to issue a `ReferenceGrant`:
+
+.`artifacts/ext-authz/ref-grant.yaml`
+[source,yaml]
+----
+---
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: allow-access-to-extauthz
+  namespace: default
+spec:
+  from:
+  - group: gateway.envoyproxy.io
+    kind: SecurityPolicy
+    namespace: httpbin
+  to:
+  - group: ""
+    kind: Service
+----
+
+== Security: OIDC with Okta
+
+This section covers:
+
+* Configuring Okta (groups, users, app integration, claims).
+* A `SecurityPolicy` that kicks off the OAuth2 flow.
+* A second `SecurityPolicy` that decorates the request with headers from JWT claims.
+* A claim-aware `HTTPRoute` that uses those headers for authorization.
+
+=== Okta configuration
+
+==== Create a group
+
+* Okta UI → *Directory* → *Groups* → *Add group* → name it `admin`.
+
+==== Create two users
+
+* Okta UI → *Directory* → *People* → *Add person*, twice:
+** `johndoe@example.com` (no group).
+** `zeboss@example.com` (member of `admin`).
+* Both users: *I will set the password*, uncheck *User must change password on first login*.
+
+==== Create the app integration
+
+* Okta UI → *Applications* → *Create App Integration* →
+  *OIDC*, *Web Application*, *Next*.
+* Name: `httpbin.esuez.org` (substitute your domain).
+* Sign-in redirect URI: `https://httpbin.esuez.org/oauth2/callback`.
+* Sign-out redirect URI: `https://httpbin.esuez.org/logout`.
+* Save.
+* In *Assignments* → assign both people and the `admin` group.
+* In *General*, copy the Client ID and Client Secret.
+
+==== Authorization server and custom claim
+
+* Okta UI → *Security* → *API* → default authorization server.
+* Copy the *Issuer URL*.
+* *Claims* → *Add Claim*:
+** Name: `access`.
+** Include in: Access Token. Value type: Expression.
+** Expression: `(user == null) ? "default" : user.isMemberOfGroupName("admin") ? "privileged" : "default"`.
+* *Token Preview* → verify the claim appears as `privileged` for `zeboss` and `default` for `johndoe`.
+
+=== Environment, secret, and first policy
+
+[source,bash]
+----
+export ISSUER="https://dev-*****.okta.com/oauth2/default"
+export CLIENT_ID="..."
+export CLIENT_SECRET="*****"
+
+kubectl create secret generic httpbin-client-secret \
+  --from-literal=client-secret=$CLIENT_SECRET
+----
+
+.`artifacts/oidc/oidc-policy.yaml`
+[source,yaml]
+----
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: httpbin-security-policy
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: httpbin
+  oidc:
+    provider:
+      issuer: "$ISSUER"
+    clientID: "$CLIENT_ID"
+    clientSecret:
+      name: httpbin-client-secret
+    redirectURL: "https://httpbin.esuez.org/oauth2/callback"
+    logoutPath: "/logout"
+    forwardAccessToken: true
+----
+
+[source,bash]
+----
+envsubst < oidc/oidc-policy.yaml | kubectl apply -f -
+----
+
+Browsing to `https://httpbin.esuez.org/` redirects to Okta. After sign-in,
+Envoy Gateway lands you back on the app.
+
+=== Claim-based authorization
+
+==== Augmented SecurityPolicy (adds a JWT provider)
+
+.`artifacts/oidc/security-policy.yaml`
+[source,yaml]
+----
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: httpbin-security-policy
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: httpbin
+  oidc:
+    provider:
+      issuer: "$ISSUER"
+    clientID: "$CLIENT_ID"
+    clientSecret:
+      name: httpbin-client-secret
+    redirectURL: "https://httpbin.esuez.org/oauth2/callback"
+    logoutPath: "/logout"
+    forwardAccessToken: true
+  jwt:
+    providers:
+    - name: okta
+      issuer: "$ISSUER"
+      recomputeRoute: true
+      claimToHeaders:
+      - claim: sub
+        header: x-sub
+      - claim: access
+        header: x-access
+      remoteJWKS:
+        uri: "$ISSUER/v1/keys"
+----
+
+`recomputeRoute: true` is what makes the downstream route-matching able to
+see the `x-access` header that was just synthesized from the JWT.
+
+[source,bash]
+----
+envsubst < oidc/security-policy.yaml | kubectl apply -f -
+----
+
+==== Authorization route (header-gated)
+
+.`artifacts/oidc/authz-route.yaml`
+[source,yaml]
+----
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: httpbin
+spec:
+  hostnames:
+  - httpbin.esuez.org
+  parentRefs:
+  - name: eg
+    sectionName: https
+  rules:
+  - matches:
+    - path:
+        type: Exact
+        value: /headers
+    - path:
+        type: Exact
+        value: /oauth2/callback
+    - path:
+        type: Exact
+        value: /logout
+    backendRefs:
+    - name: httpbin
+      port: 8000
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /
+      headers:
+      - name: x-access
+        value: "privileged"
+    backendRefs:
+    - name: httpbin
+      port: 8000
+  - backendRefs:
+    - name: invalid-backend
+      port: 8080
+----
+
+Three rules, in priority order:
+
+. *Public-ish*: `/headers`, `/oauth2/callback`, `/logout` are available to any authenticated user.
+. *Privileged*: anything else is only accessible when `x-access: privileged` is present (i.e. the user is in the `admin` group).
+. *Fallback*: routes to `invalid-backend` — intentionally a 503 for anyone who doesn't match the above.
+
+[source,bash]
+----
+kubectl apply -f oidc/authz-route.yaml
+----
+
+Test both users:
+
+* `johndoe` (default): can reach `/headers`, gets an error on other paths.
+* `zeboss` (privileged): reaches any endpoint.
+
+References:
+
+* https://gateway.envoyproxy.io/docs/tasks/security/oidc/[EG OIDC task]
+* https://gateway.envoyproxy.io/docs/tasks/traffic/http-routing/#jwt-claims-based-routing[EG JWT claim-based routing]
+
+== Traffic management: Weighted traffic splitting
+
+Canary between two `customers` backends with a single weighted HTTPRoute.
+
+=== Deploy `customers-v2`
+
+.`artifacts/traffic-split/customers-v2.yaml`
+[source,yaml]
+----
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: customers-v2
+  labels:
+    app: customers
+    version: v2
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: customers
+      version: v2
+  template:
+    metadata:
+      labels:
+        app: customers
+        version: v2
+    spec:
+      serviceAccountName: customers
+      containers:
+      - image: gcr.io/tetratelabs/customers:2.0.0
+        imagePullPolicy: Always
+        name: svc
+        ports:
+        - containerPort: 3000
+----
+
+=== Separate Services for each subset
+
+.`artifacts/traffic-split/customers-subsets.yaml`
+[source,yaml]
+----
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: customers-v1
+spec:
+  selector:
+    app: customers
+    version: v1
+  ports:
+  - port: 80
+    name: http
+    targetPort: 3000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: customers-v2
+spec:
+  selector:
+    app: customers
+    version: v2
+  ports:
+  - port: 80
+    name: http
+    targetPort: 3000
+----
+
+=== The 80/20 route
+
+.`artifacts/traffic-split/customers-route.yaml`
+[source,yaml]
+----
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: customers
+spec:
+  hostnames:
+  - customers.example.com
+  parentRefs:
+  - name: eg
+  rules:
+  - backendRefs:
+    - name: customers-v1
+      port: 80
+      weight: 80
+    - name: customers-v2
+      port: 80
+      weight: 20
+----
+
+[source,bash]
+----
+kubectl apply -f traffic-split/customers-v2.yaml
+kubectl apply -f traffic-split/customers-subsets.yaml
+kubectl apply -f traffic-split/customers-route.yaml
+
+for i in {1..10}; do
+  curl http://customers.example.com/ \
+    --resolve customers.example.com:80:$GATEWAY_IP
+done
+----
+
+Payloads differ between versions (v2 returns customer names *and* cities;
+v1 returns just names), so you can visually confirm the ~80/20 mix.
+
+== Extensibility: Wasm extensions
+
+Envoy Gateway exposes Wasm filters via `EnvoyExtensionPolicy`, attached to
+an HTTPRoute. The example plugin in this course injects configurable
+headers into responses.
+
+.`artifacts/wasm/extension-policy.yaml`
+[source,yaml]
+----
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyExtensionPolicy
+metadata:
+  name: wasm-plugin
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: httpbin
+  wasm:
+  - code:
+      type: Image
+      image:
+        url: us-central1-docker.pkg.dev/eitan-tetrate/misc-repo/wasm:v1
+    config:
+      header_1: my first header
+      header_2: "yet another header.."
+----
+
+[source,bash]
+----
+# Baseline: no extra headers
+curl -v http://httpbin.example.com/json --resolve httpbin.example.com:80:$GATEWAY_IP
+
+kubectl apply -f wasm/extension-policy.yaml
+
+# Repeat the request; response now includes header_1/header_2
+curl -v http://httpbin.example.com/json --resolve httpbin.example.com:80:$GATEWAY_IP
+----
+
+== Observability: Prometheus and Grafana
+
+=== EnvoyProxy telemetry config (access logs)
+
+Envoy Gateway only emits access logs when the `EnvoyProxy` CRD has a
+`telemetry.accessLog` block set. The course uses this JSON-formatted
+configuration:
+
+.`artifacts/envoy-proxy-config.yaml`
+[source,yaml]
+----
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: teg-envoy-proxy-config
+  namespace: envoy-gateway-system
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+spec:
+  logging:
+    level:
+      default: warn
+      oauth2: info
+      jwt: info
+  provider:
+    kubernetes:
+      envoyDeployment:
+        container: {}
+        pod: {}
+    type: Kubernetes
+  telemetry:
+    accessLog:
+      settings:
+        - format:
+            type: Text
+            text: |
+              {"start_time":"%START_TIME%","method":"%REQ(:METHOD)%","x-envoy-origin-path":"%REQ(X-ENVOY-ORIGINAL-PATH?:PATH)%","protocol":"%PROTOCOL%","response_code":"%RESPONSE_CODE%","response_flags":"%RESPONSE_FLAGS%","response_code_details":"%RESPONSE_CODE_DETAILS%","connection_termination_details":"%CONNECTION_TERMINATION_DETAILS%","upstream_transport_failure_reason":"%UPSTREAM_TRANSPORT_FAILURE_REASON%","bytes_received":"%BYTES_RECEIVED%","bytes_sent":"%BYTES_SENT%","duration":"%DURATION%","x-envoy-upstream-service-time":"%RESP(X-ENVOY-UPSTREAM-SERVICE-TIME)%","x-forwarded-for":"%REQ(X-FORWARDED-FOR)%","user-agent":"%REQ(USER-AGENT)%","x-request-id":"%REQ(X-REQUEST-ID)%",":authority":"%REQ(:AUTHORITY)%","upstream_host":"%UPSTREAM_HOST%","upstream_cluster":"%UPSTREAM_CLUSTER%","upstream_local_address":"%UPSTREAM_LOCAL_ADDRESS%","downstream_local_address":"%DOWNSTREAM_LOCAL_ADDRESS%","downstream_remote_address":"%DOWNSTREAM_REMOTE_ADDRESS%","requested_server_name":"%REQUESTED_SERVER_NAME%","route_name":"%ROUTE_NAME%","x_sub":"%REQ(X-SUB)%","x_admin":"%REQ(X-ADMIN)%"}
+          sinks:
+          - file:
+              path: /dev/stdout
+            type: File
+----
+
+=== Generate load
+
+[source,bash]
+----
+while true; do
+  curl --insecure --head https://httpbin.example.com/json \
+    --resolve httpbin.example.com:443:$GATEWAY_IP
+  sleep 0.5
+done
+----
+
+=== View raw Envoy proxy metrics with `egctl`
+
+[source,bash]
+----
+egctl x stats envoy-proxy \
+  -l gateway.envoyproxy.io/owning-gateway-name=eg \
+  -l gateway.envoyproxy.io/owning-gateway-namespace=infra \
+  -n envoy-gateway-system
+
+# Only cluster (upstream) metrics
+egctl x stats envoy-proxy \
+  -l gateway.envoyproxy.io/owning-gateway-name=eg \
+  -l gateway.envoyproxy.io/owning-gateway-namespace=infra \
+  -n envoy-gateway-system \
+  --type clusters
+----
+
+=== Install Prometheus + Grafana via the EG addons chart
+
+[source,bash]
+----
+helm install eg-addons oci://docker.io/envoyproxy/gateway-addons-helm \
+  --version v{eg-version} \
+  --set opentelemetry-collector.enabled=true \
+  -n monitoring --create-namespace
+----
+
+Once Prometheus, Grafana, Loki, Tempo, and Fluent-Bit are running in
+`monitoring`, open Grafana:
+
+[source,bash]
+----
+kubectl -n monitoring port-forward svc/grafana 3000:80
+# visit http://localhost:3000, login admin:admin
+----
+
+Four dashboards ship pre-imported in the *envoy-gateway* folder:
+
+* *Envoy Global* — data plane.
+* *Envoy Gateway Global* — control plane.
+* *Envoy Clusters* — per-upstream metrics.
+* *Resources Monitor* — CPU/memory for both planes.
+
+=== Ad-hoc PromQL
+
+[source,bash]
+----
+kubectl -n monitoring port-forward svc/prometheus 9090:80
+# visit http://localhost:9090
+----
+
+[source,promql]
+----
+envoy_cluster_upstream_rq_retry{envoy_cluster_name="httproute/default/httpbin/rule/0"}
+----
+
+== Takeaways
+
+* Envoy Gateway has come a long way since Matt Klein's
+  https://blog.envoyproxy.io/introducing-envoy-gateway-ad385cc59532[original announcement]
+  of a cross-vendor (Tetrate, Ambassador Labs, VMware, ...) collaboration.
+* EG v{eg-version} is a fully-conformant implementation of the Kubernetes Gateway API.
+* EG unlocks https://www.envoyproxy.io/[Envoy's] capabilities in a way that
+  is easy to deploy and configure in a cloud-native environment.
+* This course scratches the surface — see the EG
+  https://gateway.envoyproxy.io/docs/tasks/[tasks docs] for dozens more
+  recipes across traffic management, security, and extensibility.
+* Besides routing and security, operational and observability facets are
+  critical to a production-grade install. The appendix below is a start.
+
+== Envoy Gateway Debugging & Operations
+
+This appendix is a field guide for operating and troubleshooting an Envoy Gateway v{eg-version} deployment built on Gateway API v1.1.x. The flow mirrors how an on-call engineer actually works: start at the Kubernetes API, walk outward to the Envoy Gateway control plane, then into the per-`Gateway` data plane pod, and finally into Envoy itself via its admin interface and `egctl`.
+
+=== First-look diagnosis
+
+Whenever something is not working, start by asking the Kubernetes API what it thinks the state of the world is. Every Envoy Gateway object exposes its real status in `status.conditions` (on the resource itself) or `status.parents[*].conditions` / `status.ancestors[*].conditions` (on routes and policies). Before you touch Envoy, read those conditions.
+
+==== Triage order
+
+. List all Gateway API resources across all namespaces so nothing is hidden in a tenant namespace.
+. Inspect the conditions on those objects.
+. List all Envoy Gateway policies across all namespaces.
+. Only then look at pods, logs, or config dumps.
+
+[source,bash]
+----
+# 1. Core Gateway API objects
+kubectl get gatewayclass
+kubectl get gateway,httproute,referencegrant -A
+
+# 2. Envoy Gateway policy CRDs
+kubectl get backendtrafficpolicy,clienttrafficpolicy \
+              securitypolicy,envoyextensionpolicy,envoyproxy -A
+
+# 3. Condition-level detail for the specific object
+kubectl describe gatewayclass eg
+kubectl describe gateway -n apps my-gateway
+kubectl describe httproute -n apps my-route
+----
+
+==== Reading parent/ancestor conditions
+
+Gateway API expresses "is this resource actually wired up?" through three conditions. If any of them is not `True`, that is the first thing to fix.
+
+[cols="1,3",options="header"]
+|===
+| Condition       | Meaning when `True`
+
+| `Accepted`      | The controller saw the object and agrees it is syntactically valid and addressed to a class/parent it manages.
+| `ResolvedRefs`  | All referenced objects (backends, secrets, filters, cross-namespace targets) exist and are reachable; a missing `ReferenceGrant` will flip this to `False`.
+| `Programmed`    | For `Gateway` and its listeners: Envoy Gateway has actually rendered xDS and the data plane deployment is ready.
+|===
+
+A handy one-liner to see every HTTPRoute's parent conditions at once:
+
+[source,bash]
+----
+kubectl get httproute -A -o json | jq -r '
+  .items[]
+  | . as $r
+  | .status.parents[]?
+  | "\($r.metadata.namespace)/\($r.metadata.name) -> "
+    + (.parentRef.name // "?")
+    + " "
+    + (.conditions[] | "\(.type)=\(.status)")'
+----
+
+For policies (`SecurityPolicy`, `BackendTrafficPolicy`, `ClientTrafficPolicy`, `EnvoyExtensionPolicy`), the attachment status lives under `status.ancestors[*].conditions`; the `Accepted` ancestor condition is the moral equivalent of `Programmed` on a `Gateway`.
+
+=== Envoy Gateway control plane
+
+The control plane lives in the `envoy-gateway-system` namespace (the default when installed via the Helm chart `oci://docker.io/envoyproxy/gateway-helm`). It watches Gateway API and Envoy Gateway CRDs, translates them to xDS, and spawns one Envoy deployment per `Gateway`.
+
+==== Pods and workloads
+
+[source,bash]
+----
+kubectl get pods -n envoy-gateway-system
+# NAME                             READY   STATUS
+# envoy-gateway-xxxxxxxx-yyyyy     1/1     Running   <- controller
+# envoy-ratelimit-xxxxxxxx-yyyyy   1/1     Running   <- only if ratelimit enabled
+# redis-xxxxxxxx-yyyyy             1/1     Running   <- only if ratelimit enabled
+----
+
+The controller Deployment is always called `envoy-gateway`. If rate limiting is enabled in the `EnvoyGateway` bootstrap config, you will also see `envoy-ratelimit` (the Lyft ratelimit service) and a `redis` backing store.
+
+==== Controller logs
+
+[source,bash]
+----
+kubectl logs -n envoy-gateway-system deploy/envoy-gateway --tail=200
+kubectl logs -n envoy-gateway-system deploy/envoy-gateway -f \
+  | grep -i -E 'error|warn|reconcil'
+----
+
+A healthy reconcile line looks roughly like:
+
+[source]
+----
+{"level":"info","ts":"...","logger":"provider","caller":"kubernetes/controller.go:...",
+ "msg":"reconciling gateway","namespace":"apps","name":"my-gateway"}
+{"level":"info","ts":"...","logger":"runner","msg":"xds server updated",
+ "nodeID":"apps/my-gateway"}
+----
+
+To watch only your gateway, filter by name:
+
+[source,bash]
+----
+kubectl logs -n envoy-gateway-system deploy/envoy-gateway -f \
+  | grep -E '"name":"my-gateway"|apps/my-gateway'
+----
+
+Common reconcile-loop errors:
+
+* `failed to translate Gateway API resources`: malformed HTTPRoute or policy — look at the surrounding line for the offending `namespace/name`.
+* `referenced secret not found`: TLS listener points to a `Secret` that does not exist or lives in another namespace without a `ReferenceGrant`.
+* `ratelimit is not enabled`: a `BackendTrafficPolicy` declares `rateLimit` but the `EnvoyGateway` config has no `rateLimit.backend.redis` stanza.
+
+==== Rate-limit sidecar
+
+If you enabled global rate limiting, the controller hands descriptors to `envoy-ratelimit`, which in turn stores counters in Redis.
+
+[source,bash]
+----
+kubectl get deploy -n envoy-gateway-system envoy-ratelimit
+kubectl logs   -n envoy-gateway-system deploy/envoy-ratelimit --tail=200
+kubectl logs   -n envoy-gateway-system deploy/redis --tail=50
+----
+
+=== The per-Gateway data plane deployment
+
+Envoy Gateway does not run a single shared Envoy. For every `Gateway` object, it spawns a dedicated Envoy `Deployment` and `Service` inside the `envoy-gateway-system` namespace, named:
+
+[source]
+----
+envoy-<gateway-namespace>-<gateway-name>-<short-hash>
+----
+
+==== Finding it
+
+[source,bash]
+----
+# By owner label (works even if you do not know the hash)
+kubectl get pods -A \
+  -l gateway.envoyproxy.io/owning-gateway-name=my-gateway \
+  -l gateway.envoyproxy.io/owning-gateway-namespace=apps
+
+# Matching deployment and service
+kubectl get deploy,svc -n envoy-gateway-system \
+  -l gateway.envoyproxy.io/owning-gateway-name=my-gateway
+----
+
+==== Restarting a data plane
+
+Envoy picks up xDS pushes live; you almost never _need_ to restart it. But for clearing stuck listener state (certificate rotation misfires, stuck Wasm module, etc.):
+
+[source,bash]
+----
+kubectl rollout restart deploy \
+  -n envoy-gateway-system \
+  -l gateway.envoyproxy.io/owning-gateway-name=my-gateway
+kubectl rollout status  deploy \
+  -n envoy-gateway-system \
+  -l gateway.envoyproxy.io/owning-gateway-name=my-gateway
+----
+
+==== EnvoyProxy CRD: customising the data plane
+
+The `EnvoyProxy` CRD attaches to a `GatewayClass` (fleet-wide) or an individual `Gateway` (per-instance) via `parametersRef`, and customises the spawned deployment. Typical fields:
+
+[source,yaml]
+----
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: custom-proxy
+  namespace: envoy-gateway-system
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyDeployment:
+        replicas: 3
+        pod:
+          annotations:
+            prometheus.io/scrape: "true"
+  logging:
+    level:
+      default: info
+      http:    debug
+  telemetry:
+    accessLog:
+      settings:
+        - format:
+            type: Text
+            text: |
+              [%START_TIME%] "%REQ(:METHOD)% %REQ(:PATH)%" %RESPONSE_CODE%
+    metrics:
+      prometheus: {}
+    tracing:
+      provider:
+        type: OpenTelemetry
+        host: tempo.observability.svc
+        port: 4317
+----
+
+After editing, verify the controller picked it up:
+
+[source,bash]
+----
+kubectl describe envoyproxy -n envoy-gateway-system custom-proxy
+kubectl get deploy -n envoy-gateway-system \
+  -l gateway.envoyproxy.io/owning-gateway-name=my-gateway \
+  -o yaml | grep -A2 replicas
+----
+
+=== Envoy admin interface
+
+Every Envoy data plane pod exposes its admin interface on port `19000`, bound to localhost. Port-forward into it — this is the single most useful debugging tool.
+
+[source,bash]
+----
+POD=$(kubectl get pod -n envoy-gateway-system \
+  -l gateway.envoyproxy.io/owning-gateway-name=my-gateway \
+  -o jsonpath='{.items[0].metadata.name}')
+
+kubectl port-forward -n envoy-gateway-system "$POD" 19000:19000 &
+----
+
+==== Useful endpoints
+
+[cols="1,3",options="header"]
+|===
+| Endpoint                  | What it gives you
+
+| `/ready`                  | `LIVE` if the pod has finished warming listeners. Used as the readiness probe.
+| `/config_dump`            | Full xDS snapshot: bootstrap, listeners, routes, clusters, secrets.
+| `/listeners`              | Compact list of listeners and the addresses they are bound to.
+| `/clusters`               | Every upstream, with health, outlier, and circuit-breaker state.
+| `/certs`                  | Every TLS cert loaded, with SANs, expiry, and serial.
+| `/stats/prometheus`       | Metrics in Prometheus exposition format (scraped by `PodMonitor`).
+| `/logging`                | Read or change Envoy log levels at runtime: `curl -XPOST '...?http=debug'`.
+|===
+
+==== jq recipes against /config_dump
+
+[source,bash]
+----
+# All dynamic listeners (these are generated from your Gateway listeners)
+curl -s localhost:19000/config_dump \
+  | jq '.configs[] | select(.["@type"]|endswith("ListenersConfigDump"))
+        | .dynamic_listeners[].active_state.listener.name'
+
+# All route configurations (each one backs an HTTPRoute parent)
+curl -s localhost:19000/config_dump \
+  | jq '.configs[] | select(.["@type"]|endswith("RoutesConfigDump"))
+        | .dynamic_route_configs[].route_config
+        | {name, virtual_hosts: (.virtual_hosts|map({name, domains}))}'
+
+# All upstream clusters (backends)
+curl -s localhost:19000/config_dump \
+  | jq '.configs[] | select(.["@type"]|endswith("ClustersConfigDump"))
+        | .dynamic_active_clusters[].cluster.name'
+----
+
+==== How Gateway API objects map into the dump
+
+[cols="1,2",options="header"]
+|===
+| Gateway API object              | Shows up in the config dump as
+
+| `Gateway` listener              | A dynamic listener named `<ns>/<gw>/<listener>` with a filter chain.
+| `HTTPRoute`                     | A `virtual_host` inside a `route_config`; each `rule` becomes one or more `routes[]`.
+| Backend `Service` of an HTTPRoute | A dynamic cluster named `<ns>/<svc>/<port>` with EDS endpoints.
+| `BackendTrafficPolicy` (HTTP/2, connection pool, retries) | `typed_extension_protocol_options` and circuit breakers on that cluster.
+| `BackendTrafficPolicy` (rateLimit) | A `HTTPRateLimit` filter on the listener and a descriptor attached to the route.
+| `ClientTrafficPolicy`           | Listener-level settings: `per_connection_buffer_limit_bytes`, HTTP/2 options, proxy-protocol.
+| `SecurityPolicy` (basicAuth)    | A `basic_auth` HTTP filter with inline users.
+| `SecurityPolicy` (extAuth)      | An `ext_authz` HTTP filter plus a cluster pointing at your authz service.
+| `SecurityPolicy` (OIDC)         | An `oauth2` HTTP filter and a cluster for the IdP discovery endpoint.
+| `EnvoyExtensionPolicy` (Wasm)   | A `wasm` HTTP filter, with a `code.remote` VM fetched from OCI or HTTP.
+|===
+
+=== egctl
+
+`egctl` is the Envoy Gateway CLI. It wraps the admin interface and also knows how to do offline translation.
+
+==== Inspect a running proxy
+
+[source,bash]
+----
+# Everything (listeners, routes, clusters, bootstrap) for all pods of a gateway
+egctl config envoy-proxy all \
+  --namespace envoy-gateway-system \
+  -l gateway.envoyproxy.io/owning-gateway-name=my-gateway
+
+# Narrower views
+egctl config envoy-proxy listener  <pod> -n envoy-gateway-system
+egctl config envoy-proxy route     <pod> -n envoy-gateway-system
+egctl config envoy-proxy cluster   <pod> -n envoy-gateway-system
+egctl config envoy-proxy bootstrap <pod> -n envoy-gateway-system
+----
+
+==== Offline translation
+
+Extremely useful in CI: given a YAML bundle of Gateway API and Envoy Gateway resources, print what the xDS would be without ever hitting a cluster.
+
+[source,bash]
+----
+egctl experimental translate \
+  --from gateway-api --to xds \
+  --file route.yaml
+
+# Only show the generated HTTPRoute status
+egctl experimental translate \
+  --from gateway-api --to gateway-api \
+  --file route.yaml \
+  --output yaml
+----
+
+==== Cluster-wide status overview
+
+[source,bash]
+----
+egctl experimental status
+# Prints every Gateway, Route, and Policy with its Accepted/Programmed/ResolvedRefs state.
+----
+
+=== Policy debugging
+
+==== SecurityPolicy: basicAuth
+
+`basicAuth` takes a `Secret` whose `.data.users` key is an *htpasswd* file. The single most common mistake is putting `user:plaintext` instead of `user:$apr1$...`.
+
+[source,bash]
+----
+# Generate a correct file
+htpasswd -cB users.htpasswd alice
+kubectl create secret generic basic-auth-users \
+  --from-file=users=users.htpasswd -n apps
+
+# Verify (should start with $apr1$ or $2y$)
+kubectl get secret -n apps basic-auth-users \
+  -o jsonpath='{.data.users}' | base64 -d | head
+
+# Confirm the policy attached
+kubectl describe securitypolicy -n apps basic-auth
+# Look at Status.Ancestors[*].Conditions -> Accepted=True
+----
+
+==== SecurityPolicy: extAuth
+
+`extAuth` can point at a gRPC or HTTP authorization service. Cross-namespace references require a `ReferenceGrant` in the *backend's* namespace.
+
+[source,bash]
+----
+# The cluster must appear in the config dump
+curl -s localhost:19000/config_dump | \
+  jq '.. | .cluster? // empty | select(.name | contains("ext-authz"))'
+
+# ReferenceGrant present?
+kubectl get referencegrant -A
+kubectl describe referencegrant -n authz allow-apps-to-authz
+----
+
+If `ResolvedRefs=False` with reason `RefNotPermitted`, the `ReferenceGrant` is either missing or does not list your `SecurityPolicy` as a `from`.
+
+==== SecurityPolicy: OIDC
+
+Three things go wrong, in order of frequency:
+
+. *Redirect URI mismatch*: the URL your IdP redirects to must exactly match the IdP's "allowed redirect URIs". Envoy Gateway's default is `https://<host>/oauth2/callback`.
+. *`clientID` / `clientSecret` Secret*: must contain keys `client-id` and `client-secret`. Missing keys produce `ResolvedRefs=False`.
+. *Session cookie not set*: the `Secure` flag requires HTTPS; testing over plain HTTP will silently drop the cookie and you'll redirect-loop.
+
+[source,bash]
+----
+kubectl describe securitypolicy -n apps oidc-app
+kubectl get secret -n apps oidc-client \
+  -o jsonpath='{.data}' | jq 'keys'
+# should contain "client-id" and "client-secret"
+
+# Follow a login end-to-end
+curl -vkL --cookie-jar cj --cookie cj \
+     --resolve app.example.com:443:127.0.0.1 \
+     https://app.example.com/
+----
+
+==== BackendTrafficPolicy: rate limit
+
+[source,bash]
+----
+# 1. Is global rate limiting even enabled?
+kubectl get cm -n envoy-gateway-system envoy-gateway-config -o yaml \
+  | yq '.data."envoy-gateway.yaml"' \
+  | yq '.extensionApis, .rateLimit'
+
+# 2. Does the ratelimit service have connectivity to Redis?
+RL=$(kubectl get pod -n envoy-gateway-system -l app=envoy-ratelimit \
+      -o jsonpath='{.items[0].metadata.name}')
+kubectl exec -n envoy-gateway-system "$RL" -- nc -zv redis 6379
+
+# 3. Ask the ratelimit service directly
+kubectl logs -n envoy-gateway-system deploy/envoy-ratelimit --tail=100
+----
+
+==== Policy ancestor status
+
+Every policy attaches to something (a `Gateway`, an `HTTPRoute`, a `GatewayClass`). Its status is indexed by ancestor:
+
+[source,bash]
+----
+kubectl get securitypolicy -n apps oidc-app \
+  -o jsonpath='{range .status.ancestors[*]}{.ancestorRef.name}{" "}
+              {range .conditions[*]}{.type}={.status}{" "}{end}{"\n"}{end}'
+# my-gateway Accepted=True ResolvedRefs=True
+----
+
+=== TLS / HTTPS debugging
+
+==== cert-manager side
+
+[source,bash]
+----
+kubectl describe certificate -n apps app-tls
+# Look for:
+#   Ready: True
+#   Not After: <future date>
+#   Events: Certificate issued successfully
+
+kubectl describe certificaterequest -n apps
+kubectl describe order,challenge  -n apps   # ACME only
+----
+
+==== The Secret
+
+The `Secret` must be type `kubernetes.io/tls` and contain `tls.crt` + `tls.key`:
+
+[source,bash]
+----
+kubectl get secret -n apps app-tls -o jsonpath='{.data}' | jq 'keys'
+# ["ca.crt","tls.crt","tls.key"]
+
+kubectl get secret -n apps app-tls -o jsonpath='{.data.tls\.crt}' \
+  | base64 -d | openssl x509 -noout -subject -issuer -dates
+----
+
+==== Gateway listener
+
+[source,bash]
+----
+kubectl describe gateway -n apps my-gateway
+# Under Status -> Listeners -> https:
+#   Conditions:
+#     Accepted       True
+#     Programmed     True
+#     ResolvedRefs   True
+----
+
+If `ResolvedRefs=False` with reason `RefNotPermitted`, a `ReferenceGrant` is missing between the gateway namespace and the secret's namespace.
+
+==== Smoke test with curl
+
+[source,bash]
+----
+# Reach Envoy directly via its LoadBalancer / NodePort IP
+IP=$(kubectl get svc -n envoy-gateway-system \
+        -l gateway.envoyproxy.io/owning-gateway-name=my-gateway \
+        -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}')
+
+curl -v --resolve app.example.com:443:"$IP" https://app.example.com/ 2>&1 \
+  | grep -E 'subject:|issuer:|SSL connection|HTTP/'
+----
+
+==== What Envoy actually loaded
+
+[source,bash]
+----
+curl -s localhost:19000/certs | jq '.certificates[]
+  | {cert_chain: .cert_chain[0] | {subject, serial_number, days_until_expiration}}'
+----
+
+If `/certs` is empty but `kubectl describe gateway` says `Programmed=True`, the SDS push from Envoy Gateway hasn't landed yet — check controller logs for `sds` errors.
+
+=== Rate limit-specific debugging
+
+==== Is the feature on?
+
+Rate limiting is *not* enabled out of the box. It requires:
+
+[source,yaml]
+----
+# envoy-gateway-config ConfigMap, key envoy-gateway.yaml
+apiVersion: config.gateway.envoyproxy.io/v1alpha1
+kind: EnvoyGateway
+provider:
+  type: Kubernetes
+rateLimit:
+  backend:
+    type: Redis
+    redis:
+      url: redis.envoy-gateway-system.svc:6379
+----
+
+[source,bash]
+----
+kubectl get cm -n envoy-gateway-system envoy-gateway-config -o yaml
+----
+
+If `rateLimit:` is absent, any `BackendTrafficPolicy.rateLimit` will silently render no filter and produce no 429s.
+
+==== End-to-end probe
+
+[source,bash]
+----
+for i in $(seq 1 20); do
+  curl -s -o /dev/null -D - \
+       --resolve app.example.com:80:"$IP" \
+       http://app.example.com/ \
+    | grep -Ei 'HTTP/|x-ratelimit'
+  echo '---'
+done
+----
+
+Expected headers once a policy is active:
+
+[source]
+----
+x-ratelimit-limit: 10, 10;w=60
+x-ratelimit-remaining: 7
+x-ratelimit-reset: 53
+----
+
+==== "0 out of N get limited"
+
+If no requests ever get 429, the descriptor the HTTPRoute emits does not match the descriptor in the `BackendTrafficPolicy`. Dump them:
+
+[source,bash]
+----
+kubectl logs -n envoy-gateway-system deploy/envoy-ratelimit \
+  | grep -i 'descriptor'
+
+# And check what Envoy is actually sending
+curl -s localhost:19000/config_dump \
+  | jq '.. | .rate_limits? // empty'
+----
+
+Typical causes: a header-based descriptor whose header is never set by the client; a client selector that references a path pattern the HTTPRoute doesn't expose.
+
+=== Wasm / EnvoyExtensionPolicy
+
+==== Fetching from OCI
+
+Wasm modules loaded from `oci://...` require the data plane pod to have egress to the registry.
+
+[source,bash]
+----
+kubectl describe envoyextensionpolicy -n apps add-header
+# Status.Ancestors[*].Conditions:
+#   Accepted      True
+#   ResolvedRefs  True / False (False if OCI fetch failed)
+
+# Controller logs usually include the underlying pull error
+kubectl logs -n envoy-gateway-system deploy/envoy-gateway \
+  | grep -i -E 'wasm|oci|extension'
+----
+
+==== Is the filter actually in the chain?
+
+[source,bash]
+----
+curl -s localhost:19000/config_dump \
+  | jq '.. | .http_filters? // empty | .[]? | .name' \
+  | grep -i wasm
+----
+
+==== Module log output
+
+A Wasm module logs through the `proxy_log_*` ABI callbacks. Those arrive on Envoy's stdout, tagged `wasm log`:
+
+[source,bash]
+----
+kubectl logs -n envoy-gateway-system \
+  -l gateway.envoyproxy.io/owning-gateway-name=my-gateway -f \
+  | grep -i 'wasm log'
+----
+
+If you see nothing, bump the Wasm filter's log level via `EnvoyProxy`:
+
+[source,yaml]
+----
+logging:
+  level:
+    default: info
+    wasm:    debug
+----
+
+=== Observability wiring
+
+==== Access logs
+
+Access logging only happens when the `EnvoyProxy` telemetry block is set (no implicit default). After applying it:
+
+[source,bash]
+----
+kubectl logs -n envoy-gateway-system \
+  -l gateway.envoyproxy.io/owning-gateway-name=my-gateway -f
+----
+
+Each line should match the format in `telemetry.accessLog.settings[].format.text`. If the pod is silent under load, either the filter is gated by a `matches` condition or the format string references an attribute that always evaluates to empty.
+
+==== Metrics to Prometheus
+
+Envoy exposes metrics at `/stats/prometheus` on admin port 19000. Envoy Gateway's `EnvoyProxy` with `metrics.prometheus: {}` annotates the pod so a Prometheus `PodMonitor` or `ServiceMonitor` can discover it.
+
+[source,bash]
+----
+# Are the targets scraped?
+kubectl port-forward -n monitoring svc/prometheus 9090 &
+# In the UI: Status -> Targets -> look for envoy-<ns>-<name>-<hash>
+
+# Offline sanity-check a Prometheus config
+promtool check config prometheus.yaml
+
+# Ad-hoc scrape
+curl -s localhost:19000/stats/prometheus | head
+----
+
+Missing target in Prometheus, but `/stats/prometheus` returns data, almost always means the PodMonitor selector does not match the label Envoy Gateway applies (`gateway.envoyproxy.io/owning-gateway-name`).
+
+==== Tracing
+
+With `tracing.provider.type: OpenTelemetry` pointing at an OTLP collector (Tempo, OpenTelemetry Collector, etc.), Envoy creates a span per request and forwards it.
+
+Propagation requires the downstream app to relay the `traceparent` (and optionally `tracestate`) headers on outgoing calls. If you see spans for Envoy but nothing downstream:
+
+[source,bash]
+----
+# Reproduce and inspect headers the app receives
+curl -H 'x-debug: 1' http://app.example.com/trace-me
+
+# In the app's logs, look for the inbound traceparent:
+#   traceparent: 00-<trace-id>-<span-id>-01
+----
+
+No `traceparent` seen downstream => the app is stripping it, or your client never sent one and the Envoy sampling rate was 0.
+
+=== Common failure-mode table
+
+[cols="1,2,3",options="header"]
+|===
+| Symptom | Likely cause | Fix
+
+| `404` from the gateway with no matching route
+| No `HTTPRoute` selects the host/path; or the route's `parentRefs` don't match the `Gateway` listener; or `Accepted=False`.
+| `kubectl describe httproute` and check `status.parents[*].conditions`. Ensure `hostnames` overlaps the listener and `parentRefs.sectionName` matches a listener name.
+
+| `503 UH` (no_healthy_upstream)
+| Backend `Service` has no ready endpoints, or port name/number mismatch between `HTTPRoute.backendRefs` and `Service.spec.ports`.
+| `kubectl get endpointslice`, verify pod readiness, and confirm port match. Check `/clusters` for `health_flags`.
+
+| `503 NR` (no_route)
+| Request reached a listener but no virtual host/path matched.
+| Dump routes via `egctl config envoy-proxy route <pod>` and compare the `:authority` and `:path` the client actually sends.
+
+| `401` from `SecurityPolicy` (basicAuth)
+| htpasswd secret is wrong format (plaintext instead of hashed), or `Authorization` header missing on the request.
+| Regenerate with `htpasswd -B`; verify the `Secret` `users` key starts with `$2y$` or `$apr1$`.
+
+| OIDC redirect loop
+| Redirect URI mismatch at the IdP, cookie blocked because of plain HTTP, or clock skew between Envoy and IdP larger than the ID token's `leeway`.
+| Match the callback URL exactly; test via HTTPS only; sync NTP; re-check `SecurityPolicy.oidc` fields.
+
+| Rate limit never triggers
+| `rateLimit` missing from `EnvoyGateway` config; Redis not reachable; descriptor mismatch between route and policy.
+| Enable rate limit in the config map, verify `envoy-ratelimit` and `redis` are `Running`, and align descriptors.
+
+| Wasm extension not loaded
+| OCI pull failed (no egress, bad tag), SHA256 mismatch, or `EnvoyExtensionPolicy` not attached.
+| Check controller logs for the pull error; verify `ResolvedRefs=True`; confirm the filter appears in `/config_dump`.
+
+| Cross-namespace `backendRef` broken
+| Missing `ReferenceGrant` from the route/policy namespace to the backend namespace.
+| Create a `ReferenceGrant` in the *backend* namespace with `from` pointing to the route's group/kind/namespace.
+
+| Listener says `ResolvedRefs=False` with `RefNotPermitted`
+| Same as above, but for the TLS secret referenced by the listener.
+| Create a `ReferenceGrant` allowing the Gateway to read the `Secret`.
+
+| `Programmed=False` on a `Gateway`
+| Controller has not finished reconciling, or Envoy deployment failed to roll out (resource quota, image pull error).
+| `kubectl get deploy,pod -n envoy-gateway-system -l gateway.envoyproxy.io/owning-gateway-name=<name>` and inspect events.
+|===
+
+=== One-shot health script
+
+Drop this into `eg-healthcheck.sh` and run it from any context with `kubectl` access. It prints status conditions for every Envoy Gateway-relevant CRD and probes `/ready` on each data plane pod.
+
+[source,bash]
+----
+#!/usr/bin/env bash
+# eg-healthcheck.sh - quick health sweep of an Envoy Gateway install
+set -euo pipefail
+
+CP_NS=${CP_NS:-envoy-gateway-system}
+
+hr() { printf '\n=== %s ===\n' "$*"; }
+
+hr "GatewayClass"
+kubectl get gatewayclass -o json | jq -r '
+  .items[] | "\(.metadata.name)\t" +
+    (.status.conditions[]? | "\(.type)=\(.status)") ' \
+  | column -t
+
+hr "Gateways"
+kubectl get gateway -A -o json | jq -r '
+  .items[] | .metadata.namespace + "/" + .metadata.name + "\t" +
+    ((.status.conditions // [])
+      | map("\(.type)=\(.status)") | join(","))'
+
+hr "HTTPRoutes"
+kubectl get httproute -A -o json | jq -r '
+  .items[]
+  | .metadata.namespace + "/" + .metadata.name + "\t" +
+    ((.status.parents // [])
+      | map((.parentRef.name // "?") + ":" +
+            ((.conditions // []) | map("\(.type)=\(.status)") | join(",")))
+      | join(" | "))'
+
+hr "ReferenceGrants"
+kubectl get referencegrant -A --no-headers || echo '(none)'
+
+for kind in backendtrafficpolicy clienttrafficpolicy \
+            securitypolicy envoyextensionpolicy; do
+  hr "${kind}"
+  kubectl get "${kind}" -A -o json 2>/dev/null | jq -r '
+    .items[]?
+    | .metadata.namespace + "/" + .metadata.name + "\t" +
+      ((.status.ancestors // [])
+        | map((.ancestorRef.name // "?") + ":" +
+              ((.conditions // []) | map("\(.type)=\(.status)") | join(",")))
+        | join(" | "))' || echo '(none)'
+done
+
+hr "EnvoyProxy CRs"
+kubectl get envoyproxy -A --no-headers 2>/dev/null || echo '(none)'
+
+hr "Control plane pods (${CP_NS})"
+kubectl get pods -n "${CP_NS}" -o wide
+
+hr "Data plane /ready probes"
+mapfile -t PODS < <(kubectl get pods -n "${CP_NS}" \
+    -l gateway.envoyproxy.io/owning-gateway-name \
+    -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
+
+if [[ ${#PODS[@]} -eq 0 ]]; then
+  echo "no data plane pods found - are any Gateways Programmed?"
+  exit 0
+fi
+
+for p in "${PODS[@]}"; do
+  printf '%-60s ' "${p}"
+  # Run curl in the pod itself; avoids port-forward churn.
+  if kubectl exec -n "${CP_NS}" "${p}" -c envoy -- \
+       curl -sf --max-time 2 http://127.0.0.1:19000/ready >/dev/null 2>&1; then
+    echo OK
+  else
+    echo FAIL
+  fi
+done
+
+hr "Rate limit subsystem (if present)"
+if kubectl get deploy -n "${CP_NS}" envoy-ratelimit >/dev/null 2>&1; then
+  kubectl get deploy -n "${CP_NS}" envoy-ratelimit redis 2>/dev/null
+  RL=$(kubectl get pod -n "${CP_NS}" -l app=envoy-ratelimit \
+        -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+  if [[ -n "${RL}" ]]; then
+    kubectl exec -n "${CP_NS}" "${RL}" -- nc -zv redis 6379 2>&1 \
+      | sed 's/^/  redis: /'
+  fi
+else
+  echo '(rate limit not enabled)'
+fi
+----
+
+Run it directly or wire it into a CI smoke test:
+
+[source,bash]
+----
+chmod +x eg-healthcheck.sh
+./eg-healthcheck.sh | tee eg-health-$(date +%Y%m%d-%H%M).log
+----
+
+The output is designed for eyeballing in a terminal, but every line is `tab`-separated, so grepping for `=False` or `FAIL` reliably surfaces every broken resource in the cluster.
+
+== Appendix: full file inventory
+
+[cols="3,3", options="header"]
+|===
+| Original path | Section in this document
+
+| `README.md`                                                  | About this document
+| `mkdocs.yml`                                                 | About this document
+| `docs/index.md`                                              | Introduction
+| `docs/setup.md`                                              | Installation and setup
+| `docs/getting-started.md`                                    | Getting started
+| `docs/shared-gw.md`                                          | Shared Gateways
+| `docs/https.md`                                              | HTTPS
+| `docs/policy-attachments.md`                                 | Policy attachments
+| `docs/ratelimit.md`                                          | Rate limiting
+| `docs/basic-auth.md`                                         | Security: Basic Authentication
+| `docs/ext-authz.md`                                          | Security: External Authorization
+| `docs/oidc.md`                                               | Security: OIDC with Okta
+| `docs/traffic-split.md`                                      | Traffic management
+| `docs/wasm.md`                                               | Extensibility: Wasm extensions
+| `docs/observability.md`                                      | Observability
+| `docs/takeaways.md`                                          | Takeaways
+| `artifacts/setup/make-local-k3d-cluster`                     | Installation and setup
+| `artifacts/setup/gateway-class.yaml`                         | Installation and setup
+| `artifacts/apps/httpbin.yaml`                                | Getting started
+| `artifacts/apps/customers.yaml`                              | Shared Gateways
+| `artifacts/apps/web-frontend.yaml`                           | Shared Gateways
+| `artifacts/getting-started/gateway-http.yaml`                | Getting started
+| `artifacts/getting-started/httpbin-route.yaml`               | Getting started
+| `artifacts/shared-gw/gateway-http.yaml`                      | Shared Gateways
+| `artifacts/shared-gw/httpbin-route.yaml`                     | Shared Gateways
+| `artifacts/shared-gw/web-frontend-route.yaml`                | Shared Gateways
+| `artifacts/https/selfsigned-issuer.yaml`                     | HTTPS
+| `artifacts/https/gateway-add-https.yaml`                     | HTTPS
+| `artifacts/https/httpbin-to-https.yaml`                      | HTTPS
+| `artifacts/policy-attachments/httpbin-route.yaml`            | Policy attachments
+| `artifacts/policy-attachments/httpbin-policy.yaml`           | Policy attachments
+| `artifacts/ratelimit/simple.yaml`                            | Rate limiting
+| `artifacts/ratelimit/distinct-users.yaml`                    | Rate limiting
+| `artifacts/basic-auth/auth-config.yaml`                      | Security: Basic Authentication
+| `artifacts/ext-authz/ext-authz.yaml`                         | Security: External Authorization
+| `artifacts/ext-authz/security-policy.yaml`                   | Security: External Authorization
+| `artifacts/ext-authz/ref-grant.yaml`                         | Security: External Authorization
+| `artifacts/oidc/oidc-policy.yaml`                            | Security: OIDC
+| `artifacts/oidc/security-policy.yaml`                        | Security: OIDC
+| `artifacts/oidc/authz-route.yaml`                            | Security: OIDC
+| `artifacts/traffic-split/customers-v2.yaml`                  | Traffic management
+| `artifacts/traffic-split/customers-subsets.yaml`             | Traffic management
+| `artifacts/traffic-split/customers-route.yaml`               | Traffic management
+| `artifacts/wasm/extension-policy.yaml`                       | Extensibility: Wasm
+| `artifacts/envoy-proxy-config.yaml`                          | Observability
+|===
+
+'''
+
+_Attribution: the underlying course content is Tetrate's *Envoy Gateway Fundamentals*, originally published on Tetrate Academy. This consolidated version preserves the original structure and code with an added debugging/ops appendix._

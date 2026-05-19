@@ -1,0 +1,2025 @@
+= Live with Gateway API: Service Mesh Workshop (Consolidated)
+:doctype: book
+:toc: left
+:toclevels: 3
+:sectnums:
+:sectnumlevels: 3
+:icons: font
+:source-highlighter: rouge
+:experimental:
+
+[abstract]
+== About this document
+
+This is a consolidated, single-file version of the *Gateway API service mesh
+workshop* originally presented at KubeCon NA 2024 (Salt Lake City). It merges
+the original `README.md` walkthrough, the per-mesh install/setup/gateway
+guides, every Kubernetes manifest used in the demo, and the helper shell
+scripts into one asciidoc document, with an added *Debugging & Operations*
+appendix at the end.
+
+The workshop demonstrates how to configure a Kubernetes service mesh using
+the *Gateway API* — specifically `HTTPRoute` and `GRPCRoute` — with two
+different data planes:
+
+* *Linkerd* paired with *Envoy Gateway* (for north-south ingress)
+* *Istio* with its built-in ingress gateway
+
+The demo application is *Faces* from Buoyant, a small app whose UI shows a
+grid of cells — each cell is composed of a `smiley` (face) and a `color`
+(background). The `face` workload calls `smiley` over HTTP and `color` over
+gRPC, which gives us both protocols to play with.
+
+[NOTE]
+====
+Source-of-truth layout of the original workshop:
+
+[source,text]
+----
+gateway-api-workshop/
+├── README.md                       # top-level walkthrough
+├── create-cluster.sh               # bootstrap a k3d cluster
+├── demosh/check-requirements.sh    # prereq check
+├── faces/values.yaml               # Helm values for Faces
+├── gateway-api/                    # Gateway API CRD manifests (v1.1.1)
+├── istio/                          # Istio install + gateway
+├── linkerd/                        # Linkerd install + Envoy Gateway
+└── k8s/                            # all HTTPRoute/GRPCRoute demos
+    ├── namespaces.yaml
+    ├── 01-base/                    # ingress routes for the GUI and face
+    ├── 02-unconditional/           # blunt 100% reroutes
+    ├── 03-canary/                  # weighted + path-based canaries
+    ├── 04-abtest/                  # header-based A/B tests
+    └── 05-timeouts/                # HTTPRoute timeouts (mesh-specific)
+----
+====
+
+== Prerequisites
+
+=== Required CLI tools
+
+[source,bash]
+----
+# Required for both paths
+kubectl  # https://kubernetes.io/docs/tasks/tools/
+bat      # https://github.com/sharkdp/bat
+helm     # https://helm.sh/docs/intro/quickstart/
+
+# Mesh-specific (install one or both)
+linkerd   # https://linkerd.io/2/getting-started/
+istioctl  # https://istio.io/latest/docs/setup/additional-setup/getting-started/
+----
+
+=== The `check-requirements.sh` helper
+
+The workshop ships a sanity-check script that the `demosh` runner pulls in
+before anything else. It verifies the toolchain and that a cluster exists:
+
+.`demosh/check-requirements.sh`
+[source,bash]
+----
+set -e
+
+check () {
+    cmd="$1"
+    url="$2"
+
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+        echo "Missing: $cmd (see $url)" >&2
+        exit 1
+    fi
+}
+
+check_ns() {
+	kubectl get ns "$1" >/dev/null 2>&1
+}
+
+check kubectl "https://kubernetes.io/docs/tasks/tools/"
+check bat "https://github.com/sharkdp/bat"
+check helm "https://helm.sh/docs/intro/quickstart/"
+# check yq "https://github.com/mikefarah/yq?tab=readme-ov-file#install"
+
+if [[ $DEMO_MESH = "linkerd" ]]; then \
+	check linkerd "https://linkerd.io/2/getting-started/" ;\
+elif [[ $DEMO_MESH = "istio" ]]; then \
+	check istioctl "https://istio.io/latest/docs/setup/additional-setup/getting-started/" ;\
+else \
+	echo "Please rerun with DEMO_MESH=linkerd or DEMO_MESH=istio" >&2 ;\
+	exit 1 ;\
+fi
+
+# We need an _empty_ cluster.
+
+if ! check_ns kube-system; then \
+	echo "No cluster found. Please create one." >&2 ;\
+	exit 1 ;\
+fi
+
+set +e
+----
+
+=== Picking a mesh
+
+Export `DEMO_MESH` before running anything:
+
+[source,bash]
+----
+export DEMO_MESH=linkerd   # or: istio
+----
+
+If you want to drive the workshop through its original runner:
+
+[source,bash]
+----
+DEMO_MESH=linkerd demosh README.md
+# or
+DEMO_MESH=istio demosh README.md
+----
+
+== Creating a local cluster (optional)
+
+If you do not already have an empty Kubernetes cluster, the workshop
+includes a `create-cluster.sh` that stands up a local k3d cluster, exposes
+ports 80/443 to the host, disables Traefik (we will use Envoy Gateway or
+Istio), and preloads any cached images.
+
+.`create-cluster.sh`
+[source,bash]
+----
+#!/usr/bin/env bash
+#
+# SPDX-FileCopyrightText: 2022 Buoyant Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+clear
+
+# Create a K3d cluster to run the Faces application.
+CLUSTER=${CLUSTER:-gateway-api-workshop}
+
+# Ditch any old cluster...
+k3d cluster delete $CLUSTER &>/dev/null
+
+# Expose ports 80 and 443 to the local host, so that our ingress can work.
+# Don't install traefik - we'll use Istio or Envoy Gateway with Linkerd instead.
+k3d cluster create $CLUSTER \
+	-p "80:80@loadbalancer" -p "443:443@loadbalancer" \
+	--k3s-arg '--disable=traefik@server:*;agents:*'
+
+# Import cached images from local registry, if present.
+for image in \
+  cr.l5d.io/linkerd/controller:edge-24.10.4 \
+  cr.l5d.io/linkerd/metrics-api:edge-24.10.4 \
+  cr.l5d.io/linkerd/policy-controller:edge-24.10.4 \
+  cr.l5d.io/linkerd/proxy-init:v2.4.1 \
+  cr.l5d.io/linkerd/proxy:edge-24.10.4 \
+  cr.l5d.io/linkerd/tap:edge-24.10.4 \
+  cr.l5d.io/linkerd/web:edge-24.10.4 \
+  docker.io/envoyproxy/gateway:v1.1.2 \
+  envoyproxy/envoy:distroless-v1.31.2 \
+  ghcr.io/buoyantio/faces-color:2.0.0 \
+  ghcr.io/buoyantio/faces-gui:2.0.0 \
+  ghcr.io/buoyantio/faces-workload:2.0.0 \
+  prom/prometheus:v2.48.1 \
+  docker.io/istio/proxyv2:1.23.3 \
+  docker.io/istio/pilot:1.23.3 \
+  docker.io/istio/ztunnel:1.23.3 \
+  ; do \
+  c=$(docker images --format '{{ .Repository }}:{{ .Tag }}' | grep -c "$image") ;\
+  if [ $c -gt 0 ]; then \
+    echo "Loading $image from local cache" ;\
+    k3d image import -c $CLUSTER "$image" ;\
+  fi ;\
+done
+----
+
+Confirm you are talking to the expected cluster:
+
+[source,bash]
+----
+kubectl cluster-info
+----
+
+== Installing the Gateway API CRDs
+
+Gateway API is a CRD API: you must install the CRDs before the control
+plane will recognize `Gateway`, `HTTPRoute`, `GRPCRoute`, etc.
+
+The workshop uses the *experimental channel* of Gateway API *v1.1.1*. At
+the time of the workshop, Linkerd could not use the `v1.2.0` experimental
+channel because it dropped `GRPCRoute` `v1alpha2`, which Linkerd still
+depends on.
+
+[source,bash]
+----
+kubectl apply -f gateway-api/experimental-install.yaml
+----
+
+[TIP]
+====
+The bundled `gateway-api/experimental-install.yaml` was downloaded from
+`https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.1.1/experimental-install.yaml`
+— you can re-fetch it if you want to track a newer release channel.
+====
+
+== Installing the mesh
+
+Only one of the two subsections below applies, depending on your
+`DEMO_MESH` value.
+
+=== Path A: Linkerd + Envoy Gateway
+
+==== Install Linkerd
+
+.`linkerd/install.md` (command flow)
+[source,bash]
+----
+# Download the CLI (edge channel)
+curl --proto '=https' --tlsv1.2 -sSfL https://run.linkerd.io/install-edge \
+  | LINKERD2_VERSION=edge-24.10.4 sh
+
+linkerd check --pre
+
+# We explicitly tell Linkerd NOT to install Gateway API CRDs -
+# we already installed v1.1.1 ourselves.
+linkerd install --crds \
+    --set enableHttpRoutes=false \
+    --set enableTcpRoutes=false \
+    --set enableTlsRoutes=false \
+  | kubectl apply -f -
+
+linkerd install \
+    --set enableHttpRoutes=false \
+    --set enableTcpRoutes=false \
+    --set enableTlsRoutes=false \
+  | kubectl apply -f -
+
+linkerd check
+----
+
+==== Install Envoy Gateway (ingress controller)
+
+Linkerd does not ship an ingress controller, so we install Envoy Gateway
+via Helm. Its namespace is annotated for Linkerd injection using
+*KEP-753 native sidecars*; this is necessary because Envoy Gateway's
+bootstrap Job must run to completion, and a classic injected sidecar
+would block it.
+
+[IMPORTANT]
+====
+Native sidecars require Kubernetes *1.29 or higher*. The workshop uses
+Kubernetes 1.30.
+====
+
+[source,bash]
+----
+kubectl create ns envoy-gateway-system
+kubectl annotate ns envoy-gateway-system \
+    linkerd.io/inject=enabled \
+    config.alpha.linkerd.io/proxy-enable-native-sidecar=true
+
+helm install envoy-gateway \
+     -n envoy-gateway-system \
+     oci://docker.io/envoyproxy/gateway-helm \
+     --version v1.1.2
+
+kubectl rollout status -n envoy-gateway-system deploy
+----
+
+==== Create the GatewayClass and Gateway
+
+.`linkerd/gatewayclass-and-gateway.yaml`
+[source,yaml]
+----
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: envoy-gateway-class
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: ingress
+spec:
+  gatewayClassName: envoy-gateway-class
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces:
+          from: All
+----
+
+[source,bash]
+----
+kubectl apply -f linkerd/gatewayclass-and-gateway.yaml
+kubectl rollout status -n envoy-gateway-system deploy
+----
+
+==== Annotate the `faces` namespace for injection
+
+.`linkerd/setup-namespace.md` (command)
+[source,bash]
+----
+kubectl annotate namespace faces linkerd.io/inject=enabled
+----
+
+==== Find the ingress IP
+
+.`linkerd/get-ingress-ip.sh`
+[source,bash]
+----
+#!/bin/bash
+
+kubectl \
+    get svc -n envoy-gateway-system \
+            -l gateway.envoyproxy.io/owning-gateway-name=ingress \
+            -ojsonpath='{ .items[0].status.loadBalancer.ingress[0].ip }'
+----
+
+=== Path B: Istio (built-in ingress gateway)
+
+==== Install Istio
+
+.`istio/install.md` (command flow)
+[source,bash]
+----
+# Download Istio 1.23.3
+curl -L https://istio.io/downloadIstio | ISTIO_VERSION=1.23.3 sh -
+export PATH=$PWD/istio-1.23.3/bin:$PATH
+
+which istioctl
+istioctl version
+istioctl x precheck
+
+# Minimal profile skips the default ingress gateway - we will make our own
+# via Gateway API.
+istioctl install --set profile=minimal -y
+----
+
+==== Label the `faces` namespace for sidecar injection
+
+.`istio/setup-namespace.md` (command)
+[source,bash]
+----
+kubectl label namespace faces istio-injection=enabled
+----
+
+==== Create the Gateway (using the built-in `istio` GatewayClass)
+
+.`istio/gateway.yaml`
+[source,yaml]
+----
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: ingress
+spec:
+  gatewayClassName: istio
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces:
+          from: All
+----
+
+[source,bash]
+----
+kubectl apply -f istio/gateway.yaml
+kubectl wait --for=condition=Programmed gateway/ingress
+----
+
+==== Find the ingress IP
+
+.`istio/get-ingress-ip.sh`
+[source,bash]
+----
+#!/bin/bash
+
+kubectl \
+    get gateway ingress \
+        -ojsonpath='{ .status.addresses[0].value }'
+----
+
+[source,bash]
+----
+INGRESS_IP=$(bash ${DEMO_MESH}/get-ingress-ip.sh)
+echo "Ingress is running at $INGRESS_IP"
+----
+
+== Installing Faces
+
+Create the namespace and install the chart. The `values.yaml` turns off the
+"fail on purpose" behavior baked into Faces and enables the extra `smiley2`,
+`smiley3`, `color2`, `color3` workloads so we can route between them.
+
+.`k8s/namespaces.yaml`
+[source,yaml]
+----
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: faces
+----
+
+.`faces/values.yaml`
+[source,yaml]
+----
+face:
+  errorFraction: 0
+
+backend:
+  errorFraction: 0
+
+smiley2:
+  enabled: true
+
+smiley3:
+  enabled: true
+  errorFraction: 50
+
+color2:
+  enabled: true
+
+color3:
+  enabled: true
+----
+
+[NOTE]
+====
+`smiley3` has `errorFraction: 50` on purpose — later in the workshop we use
+this to simulate a bad canary and roll back.
+====
+
+[source,bash]
+----
+kubectl create namespace faces
+
+# Then run ONE of:
+#   kubectl annotate namespace faces linkerd.io/inject=enabled     (Linkerd)
+#   kubectl label     namespace faces istio-injection=enabled      (Istio)
+
+helm install faces \
+     -n faces \
+     oci://ghcr.io/buoyantio/faces-chart \
+     --version 2.0.0-rc.1 \
+     --values faces/values.yaml
+
+kubectl rollout status -n faces deploy
+----
+
+Once the rollout is complete, visit `http://${INGRESS_IP}/gui/` (or
+`http://localhost/gui/` on a local k3d). At this stage you will see
+*nothing* — we have not yet told our Gateway how to route traffic to the
+GUI.
+
+== Stage 1: Ingress routes (the "01-base" stage)
+
+We need two HTTPRoutes on the ingress Gateway:
+
+* `/gui/` → `faces-gui` service (the browser UI itself)
+* `/face` → `face` service (the API the UI calls for each cell)
+
+=== GUI route
+
+.`k8s/01-base/gui-route.yaml`
+[source,yaml]
+----
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: faces-gui-route
+  namespace: faces
+spec:
+  parentRefs:
+    - name: ingress
+      namespace: default
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /gui/
+    backendRefs:
+    - name: faces-gui
+      port: 80
+    filters:
+    - type: URLRewrite
+      urlRewrite:
+        path:
+          type: ReplaceFullPath
+          replaceFullPath: /
+----
+
+[source,bash]
+----
+kubectl apply -f k8s/01-base/gui-route.yaml
+----
+
+After this, the GUI loads in the browser — but every cell shows a
+*grimacing face on a purple background* because the GUI is trying to call
+`/face/` and nothing routes it yet.
+
+=== `face` route
+
+.`k8s/01-base/face-route.yaml`
+[source,yaml]
+----
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: face-route
+  namespace: faces
+spec:
+  parentRefs:
+    - name: ingress
+      namespace: default
+      kind: Gateway
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /face
+    filters:
+      - type: URLRewrite
+        urlRewrite:
+          path:
+            type: ReplacePrefixMatch
+            replacePrefixMatch: /
+    backendRefs:
+    - name: face
+      port: 80
+----
+
+[source,bash]
+----
+kubectl apply -f k8s/01-base/face-route.yaml
+----
+
+Reload the GUI: every cell is now a *grinning face on blue* — exactly the
+default Faces app behavior. The Gateway is now correctly routing outside
+traffic to the app.
+
+== Stage 2: Unconditional mesh routing (the "02-unconditional" stage)
+
+Until now we used `parentRef` pointing at a `Gateway` — classic north-south
+ingress. For *mesh* (east-west) traffic we use `parentRef` pointing at a
+`Service`: the route intercepts any in-mesh traffic *to that Service* and
+re-directs it.
+
+=== Simplest HTTPRoute (illustrative only)
+
+This route has *no* `backendRefs`. Applying it would be a no-op — traffic
+to `smiley` still goes to `smiley`. It is included here only to show the
+minimum viable shape of a mesh HTTPRoute.
+
+.`k8s/02-unconditional/smiley-simplest.yaml`
+[source,yaml]
+----
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: HTTPRoute
+metadata:
+  name: simple-smiley-route
+  namespace: faces
+spec:
+  parentRefs:
+    - kind: Service
+      group: ""
+      name: smiley
+      port: 80
+----
+
+=== Redirect all `smiley` traffic to `smiley2`
+
+.`k8s/02-unconditional/smiley-route.yaml`
+[source,yaml]
+----
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: HTTPRoute
+metadata:
+  name: smiley-route
+  namespace: faces
+spec:
+  parentRefs:
+    - kind: Service
+      group: ""
+      name: smiley
+      port: 80
+  rules:
+    - backendRefs:
+        - name: smiley2
+          group: ""
+          port: 80
+----
+
+[source,bash]
+----
+kubectl apply -f k8s/02-unconditional/smiley-route.yaml
+----
+
+All cells flip to *heart-eyed* smilies (the `smiley2` variant).
+
+=== Redirect all `color` gRPC traffic to `color2`
+
+GRPCRoute is the gRPC-native sibling of HTTPRoute. `face` talks to `color`
+over gRPC, so we use GRPCRoute here.
+
+.`k8s/02-unconditional/color-route.yaml`
+[source,yaml]
+----
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: GRPCRoute
+metadata:
+  name: color-route
+  namespace: faces
+spec:
+  parentRefs:
+    - name: color
+      kind: Service
+      group: ""
+      port: 80
+  rules:
+    - backendRefs:
+        - name: color2
+          port: 80
+----
+
+[source,bash]
+----
+kubectl apply -f k8s/02-unconditional/color-route.yaml
+----
+
+All cells turn *green* (the `color2` variant).
+
+[CAUTION]
+====
+Unconditional 100% reroutes are dangerous in production. If the new backend
+is broken, every user sees the breakage at once. The recovery story is
+symmetric (delete the route to roll back) but in the worst case you may
+have already scaled down the old backend — see the canary section for the
+safer pattern.
+====
+
+== Stage 3: Canary deployments (the "03-canary" stage)
+
+Rather than shifting 100% of traffic at once, a canary shifts a small
+slice and only widens it when signals look healthy.
+
+Before starting, clean up stage 2:
+
+[source,bash]
+----
+kubectl delete -n faces httproute smiley-route
+kubectl delete -n faces grpcroute color-route
+----
+
+=== HTTP canary: 10% → `smiley2`
+
+.`k8s/03-canary/smiley-canary-10.yaml`
+[source,yaml]
+----
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: HTTPRoute
+metadata:
+  name: smiley-canary
+  namespace: faces
+spec:
+  parentRefs:
+    - name: smiley
+      kind: Service
+      group: ""
+      port: 80
+  rules:
+    - backendRefs:
+        - name: smiley
+          port: 80
+          weight: 90
+        - name: smiley2
+          port: 80
+          weight: 10
+----
+
+[source,bash]
+----
+kubectl apply -f k8s/03-canary/smiley-canary-10.yaml
+----
+
+~10% of cells flip to heart-eyed.
+
+=== HTTP canary: 50%
+
+.`k8s/03-canary/smiley-canary-50.yaml`
+[source,yaml]
+----
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: HTTPRoute
+metadata:
+  name: smiley-canary
+  namespace: faces
+spec:
+  parentRefs:
+    - name: smiley
+      kind: Service
+      group: ""
+      port: 80
+  rules:
+    - backendRefs:
+        - name: smiley
+          port: 80
+          weight: 50
+        - name: smiley2
+          port: 80
+          weight: 50
+----
+
+[source,bash]
+----
+kubectl apply -f k8s/03-canary/smiley-canary-50.yaml
+----
+
+=== HTTP canary: 100%
+
+.`k8s/03-canary/smiley-canary-100.yaml`
+[source,yaml]
+----
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: HTTPRoute
+metadata:
+  name: smiley-canary
+  namespace: faces
+spec:
+  parentRefs:
+    - name: smiley
+      kind: Service
+      group: ""
+      port: 80
+  rules:
+    - backendRefs:
+        - name: smiley
+          port: 80
+          weight: 0
+        - name: smiley2
+          port: 80
+          weight: 100
+----
+
+[source,bash]
+----
+kubectl apply -f k8s/03-canary/smiley-canary-100.yaml
+
+# Prove smiley is now unused:
+kubectl scale -n faces deploy/smiley --replicas=0
+----
+
+=== Operational hygiene: replace the old workload in place
+
+After a fully-shifted canary, the on-call engineer six weeks later will be
+confused by routes pointing at a Service whose Deployment is scaled to
+zero. A cleaner resting state is to *update the Deployment behind `smiley`*
+so it returns heart-eyed faces, then *delete* the canary route.
+
+The workshop ships a sample "replacement" Deployment that does exactly that
+— it is tagged `smiley` but configured with `SMILEY=HeartEyes`:
+
+.`k8s/03-canary/smiley-replacement.yaml`
+[source,yaml]
+----
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: smiley
+  namespace: faces
+spec:
+  selector:
+    matchLabels:
+      service: smiley
+  template:
+    metadata:
+      labels:
+        service: smiley
+    spec:
+      containers:
+        - env:
+            - name: FACES_SERVICE
+              value: smiley
+            - name: SMILEY
+              value: HeartEyes
+            - name: DELAY_BUCKETS
+              value: 0,5,10,15,20,50,200,500,1500
+          image: ghcr.io/buoyantio/faces-workload:2.0.0-rc.0
+          imagePullPolicy: Always
+          name: smiley
+          ports:
+            - containerPort: 8000
+              name: http
+              protocol: TCP
+          resources:
+            limits:
+              cpu: 250m
+              memory: 128Mi
+            requests:
+              cpu: 100m
+              memory: 64Mi
+      restartPolicy: Always
+----
+
+For the workshop, we reset to the starting state instead:
+
+[source,bash]
+----
+kubectl scale -n faces deploy/smiley --replicas=1
+kubectl rollout status -n faces deploy
+kubectl delete -n faces httproute smiley-canary
+----
+
+=== gRPC canary: 25% → `color2`
+
+.`k8s/03-canary/color-canary-25.yaml`
+[source,yaml]
+----
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: GRPCRoute
+metadata:
+  name: color-canary
+  namespace: faces
+spec:
+  parentRefs:
+    - name: color
+      kind: Service
+      group: ""
+      port: 80
+  rules:
+    - backendRefs:
+        - name: color
+          port: 80
+          weight: 75
+        - name: color2
+          port: 80
+          weight: 25
+----
+
+[source,bash]
+----
+kubectl apply -f k8s/03-canary/color-canary-25.yaml
+----
+
+=== gRPC canary: 50/50
+
+.`k8s/03-canary/color-canary-50.yaml`
+[source,yaml]
+----
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: GRPCRoute
+metadata:
+  name: color-canary
+  namespace: faces
+spec:
+  parentRefs:
+    - name: color
+      kind: Service
+      group: ""
+      port: 80
+  rules:
+    - backendRefs:
+        - name: color
+          port: 80
+          weight: 50
+        - name: color2
+          port: 80
+          weight: 50
+----
+
+[source,bash]
+----
+kubectl apply -f k8s/03-canary/color-canary-50.yaml
+----
+
+Leave this one running — we will combine it with path-based routing next.
+
+=== Path-based dynamic routing
+
+The Faces UI sends requests on `/edge` for perimeter cells and on the
+default path for center cells. We can split on that path.
+
+.`k8s/03-canary/smiley-edge.yaml`
+[source,yaml]
+----
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: HTTPRoute
+metadata:
+  name: smiley-edge
+  namespace: faces
+spec:
+  parentRefs:
+    - name: smiley
+      kind: Service
+      group: ""
+      port: 80
+  rules:
+    - matches:
+      - path:
+          value: "/edge"
+      backendRefs:
+        - name: smiley2
+          port: 80
+    - backendRefs:
+        - name: smiley
+          port: 80
+----
+
+[source,bash]
+----
+kubectl apply -f k8s/03-canary/smiley-edge.yaml
+----
+
+*Edge cells* → heart-eyed (`smiley2`). *Center cells* → grinning (`smiley`).
+
+=== Combine: path + canary
+
+Send half of the *edge* traffic to `smiley3` (rolling-eyes, but buggy):
+
+.`k8s/03-canary/smiley-edge-canary-50.yaml`
+[source,yaml]
+----
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: HTTPRoute
+metadata:
+  name: smiley-edge
+  namespace: faces
+spec:
+  parentRefs:
+    - name: smiley
+      kind: Service
+      group: ""
+      port: 80
+  rules:
+    - matches:
+      - path:
+          value: "/edge"
+      backendRefs:
+        - name: smiley3
+          port: 80
+          weight: 50
+        - name: smiley2
+          port: 80
+          weight: 50
+    - backendRefs:
+        - name: smiley
+          port: 80
+----
+
+[source,bash]
+----
+kubectl apply -f k8s/03-canary/smiley-edge-canary-50.yaml
+----
+
+=== Rollback
+
+`smiley3` has `errorFraction: 50` — half its responses are a cursing face
+instead of rolling-eyes. To roll back, just reapply the prior config:
+
+[source,bash]
+----
+kubectl apply -f k8s/03-canary/smiley-edge.yaml
+# or, to fully revert:
+kubectl delete -n faces httproute smiley-edge
+----
+
+[NOTE]
+====
+Reapplying a prior manifest is the cleanest form of rollback in Gateway API
+— it is declarative, auditable (git diff), and atomic from the control
+plane's perspective.
+====
+
+=== gRPC equivalent: route on method name
+
+GRPCRoute lets you match on `service` + `method` (the gRPC service/method,
+not the Kubernetes one). Here we send the `Edge` method to `color2`:
+
+.`k8s/03-canary/color-edge.yaml`
+[source,yaml]
+----
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: GRPCRoute
+metadata:
+  name: color-edge
+  namespace: faces
+spec:
+  parentRefs:
+    - name: color
+      kind: Service
+      group: ""
+      port: 80
+  rules:
+    - matches:
+      - method:
+          service: ColorService
+          method: Edge
+      backendRefs:
+        - name: color2
+          port: 80
+    - backendRefs:
+        - name: color
+          port: 80
+----
+
+[source,bash]
+----
+kubectl apply -f k8s/03-canary/color-edge.yaml
+----
+
+=== Conflict resolution: more specific wins
+
+After applying `color-edge`, edge cells are green — but center cells are
+*still mixed blue/green*, because `color-canary` (50/50) is still in play.
+Gateway API's rule is: *more specific matches win; ties are broken by
+older `creationTimestamp`*. Deleting `color-canary` yields clean center =
+blue, edge = green:
+
+[source,bash]
+----
+kubectl delete -n faces grpcroute color-canary
+----
+
+== Stage 4: A/B testing (the "04-abtest" stage)
+
+Header-based routing is the classic building block for A/B tests. The
+Faces GUI sends `X-Faces-User: <username>` for whichever user you "log in"
+as. We will give the `heart` user a different experience.
+
+=== HTTP A/B: `heart` users get heart-eyed smilies
+
+.`k8s/04-abtest/smiley-ab.yaml`
+[source,yaml]
+----
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: HTTPRoute
+metadata:
+  name: smiley-a-b
+  namespace: faces
+spec:
+  parentRefs:
+    - name: smiley
+      kind: Service
+      group: ""
+      port: 80
+  rules:
+    - matches:
+        - headers:
+            - name: "x-faces-user"
+              value: "heart"
+      backendRefs:
+        - name: smiley2
+          port: 80
+    - backendRefs:
+        - name: smiley
+          port: 80
+----
+
+[source,bash]
+----
+kubectl apply -f k8s/04-abtest/smiley-ab.yaml
+----
+
+Open two browsers side by side — one logged in as `heart`, one as anything
+else — and you will see the split.
+
+=== "Ship it" = unconditional route, same name
+
+If the A/B experiment wins, promote it by replacing the A/B rule with an
+unconditional rule under the *same name*:
+
+.`k8s/04-abtest/smiley2-unconditional.yaml`
+[source,yaml]
+----
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: HTTPRoute
+metadata:
+  name: smiley-a-b
+  namespace: faces
+spec:
+  parentRefs:
+    - name: smiley
+      kind: Service
+      group: ""
+      port: 80
+  rules:
+    - backendRefs:
+        - name: smiley2
+          port: 80
+----
+
+[source,bash]
+----
+kubectl apply -f k8s/04-abtest/smiley2-unconditional.yaml
+# Cleanup:
+kubectl delete -n faces httproute smiley-a-b
+----
+
+=== gRPC A/B: `heart` users get dark blue
+
+.`k8s/04-abtest/color-ab.yaml`
+[source,yaml]
+----
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: GRPCRoute
+metadata:
+  name: color-a-b
+  namespace: faces
+spec:
+  parentRefs:
+    - name: color
+      kind: Service
+      group: ""
+      port: 80
+  rules:
+    - matches:
+      - method:
+          service: ColorService
+        headers:
+          - name: "x-faces-user"
+            value: "heart"
+      backendRefs:
+        - name: color3
+          port: 80
+    - backendRefs:
+        - name: color
+          port: 80
+----
+
+[source,bash]
+----
+kubectl apply -f k8s/04-abtest/color-ab.yaml
+----
+
+If you still have `color-edge` from Stage 3, you will see a surprise: the
+A/B rule wins in the center but `color-edge` wins at the edges, because
+they have *equivalent specificity* and `color-edge` is older
+(`creationTimestamp` tiebreaker again).
+
+[source,bash]
+----
+kubectl get -n faces grpcroute
+
+# To let the A/B test win everywhere:
+kubectl delete -n faces grpcroute color-edge
+----
+
+=== Simultaneous A/B across protocols
+
+[source,bash]
+----
+kubectl apply -f k8s/04-abtest/smiley-ab.yaml
+# Now 'heart' users see heart-eyed smilies AND dark-blue backgrounds.
+
+# Cleanup:
+kubectl delete -n faces httproute smiley-a-b
+kubectl delete -n faces grpcroute color-a-b
+----
+
+== Stage 5: Timeouts (the "05-timeouts" stage)
+
+Timeouts are *client-side agency* — they give the caller a way to stop
+waiting. They do not protect the server; they *increase* load on a slow
+backend (the caller retries or re-requests). Use them to improve the
+caller's user experience, not as a circuit breaker.
+
+=== Mesh-specific wrinkle
+
+At workshop time:
+
+* *Istio* implements HTTPRoute timeouts via the official Gateway API
+  `spec.rules[].timeouts.request` field.
+* *Linkerd* still uses its own `policy.linkerd.io/v1beta3` HTTPRoute for
+  timeouts. Note the `group: core` on the `parentRef` — Linkerd requires
+  this rather than `group: ""`.
+
+=== `smiley` timeout — Istio
+
+.`k8s/05-timeouts/smiley-timeout-istio.yaml`
+[source,yaml]
+----
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: smiley-timeout
+  namespace: faces
+spec:
+  parentRefs:
+    - name: smiley
+      kind: Service
+      group: ""
+      port: 80
+  rules:
+    - backendRefs:
+        - name: smiley
+          port: 80
+      timeouts:
+        request: 300ms
+----
+
+=== `smiley` timeout — Linkerd
+
+.`k8s/05-timeouts/smiley-timeout-linkerd.yaml`
+[source,yaml]
+----
+apiVersion: policy.linkerd.io/v1beta3
+kind: HTTPRoute
+metadata:
+  name: smiley-timeout
+  namespace: faces
+spec:
+  parentRefs:
+    - name: smiley
+      kind: Service
+      group: core
+      port: 80
+  rules:
+  - backendRefs:
+    - name: smiley
+      port: 80
+    timeouts:
+      request: 300ms
+----
+
+[source,bash]
+----
+kubectl apply -f k8s/05-timeouts/smiley-timeout-${DEMO_MESH}.yaml
+----
+
+The GUI will render a *sleeping face* for cells whose `face → smiley`
+request hit the 300 ms ceiling.
+
+=== `color` timeout — Istio
+
+.`k8s/05-timeouts/color-timeout-istio.yaml`
+[source,yaml]
+----
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: color-timeout
+  namespace: faces
+spec:
+  parentRefs:
+    - name: color
+      kind: Service
+      group: ""
+      port: 80
+  rules:
+    - backendRefs:
+        - name: color
+          port: 80
+      timeouts:
+        request: 300ms
+----
+
+=== `color` timeout — Linkerd
+
+.`k8s/05-timeouts/color-timeout-linkerd.yaml`
+[source,yaml]
+----
+apiVersion: policy.linkerd.io/v1beta3
+kind: HTTPRoute
+metadata:
+  name: color-timeout
+  namespace: faces
+spec:
+  parentRefs:
+    - name: color
+      kind: Service
+      group: core
+      port: 80
+  rules:
+  - backendRefs:
+    - name: color
+      port: 80
+    timeouts:
+      request: 300ms
+----
+
+[NOTE]
+====
+Note that Istio's color timeout is still an HTTPRoute, *not* a GRPCRoute —
+at workshop time, GRPCRoute *did not yet support timeouts*. The same
+caveat applies to Linkerd's `policy.linkerd.io` kind. Keep an eye on the
+Gateway API upstream for `GRPCRoute.spec.rules[].timeouts`.
+====
+
+=== `face` timeout — applied at the ingress
+
+We already have an HTTPRoute for `/face` on the ingress Gateway; we just
+add a `timeouts` block to it. When the GUI sees a timeout from the ingress,
+it keeps showing stale data (handy for "eventually consistent" dashboards)
+and shows a counter of timed-out attempts. Repeated timeouts eventually
+fade the cell to a sleeping face on a pink background.
+
+.`k8s/05-timeouts/face-route.yaml`
+[source,yaml]
+----
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: face-route
+  namespace: faces
+spec:
+  parentRefs:
+    - name: ingress
+      namespace: default
+      kind: Gateway
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /face
+    filters:
+      - type: URLRewrite
+        urlRewrite:
+          path:
+            type: ReplacePrefixMatch
+            replacePrefixMatch: /
+    backendRefs:
+    - name: face
+      port: 80
+    timeouts:
+      request: 200ms
+----
+
+[source,bash]
+----
+kubectl apply -f k8s/05-timeouts/face-route.yaml
+----
+
+This file is a drop-in replacement for `k8s/01-base/face-route.yaml` —
+same name, same parent — so it cleanly upgrades the existing route.
+
+== Key takeaways
+
+* *Immediate effect.* Every `kubectl apply` here takes effect the moment
+  the control plane reconciles. No pod restarts. No rolling deploys.
+* *One API surface, two protocols.* HTTPRoute and GRPCRoute are mirror
+  images — the shape of canaries, A/B tests, and path-based rules is the
+  same across HTTP and gRPC.
+* *Same API, ingress and mesh.* Point `parentRef` at a `Gateway` to
+  configure the ingress; point it at a `Service` to configure the mesh.
+  Application developers never need to learn two APIs.
+* *Conflict resolution is deterministic but subtle.* More specific beats
+  less specific; ties go to the older route by `creationTimestamp`. Test
+  whenever more than one route can match a given request.
+* *Mesh portability is imperfect today.* Timeouts on Linkerd still need
+  the `policy.linkerd.io` HTTPRoute; GRPCRoute still lacks timeout
+  support in the stable channel. Check your mesh's compatibility matrix
+  before assuming the official Gateway API spec is the whole story.
+
+== Debugging and Operations
+
+This appendix is a field guide for the commands you will actually reach for when a route is not behaving, a gateway is not programming, or a mesh is silently dropping requests. It assumes Gateway API v1.1.1 (experimental channel) and the two data planes used throughout the workshop: Linkerd + Envoy Gateway, and Istio with its built-in ingress gateway.
+
+The general troubleshooting order is always the same:
+
+. Is the resource *accepted* by the controller? (`Accepted=True`)
+. Are its backend references *resolved*? (`ResolvedRefs=True`)
+. Is the parent `Gateway` *programmed*? (`Programmed=True`)
+. Is the data plane *actually configured* with what the control plane says it should be? (Envoy `config_dump`, `istioctl proxy-config`, `linkerd viz`)
+. Does a real request flowing through the mesh *do the right thing*? (`kubectl exec ... curl`, taps, traces)
+
+If you skip a step you will waste an hour. Ask me how I know.
+
+=== Inspecting Gateway API Resources
+
+The first cut is always a cluster-wide inventory. Use short names; they exist for a reason.
+
+[source,bash]
+----
+kubectl get gateway,httproute,grpcroute,gatewayclass -A
+----
+
+A healthy cluster returns something like:
+
+[source,bash]
+----
+NAMESPACE      NAME                                      CLASS             ADDRESS         PROGRAMMED   AGE
+envoy-gateway  gateway.gateway.networking.k8s.io/faces   eg                10.96.187.221   True         6d
+istio-system   gateway.gateway.networking.k8s.io/ingress istio             10.96.42.7      True         6d
+
+NAMESPACE   NAME                                           HOSTNAMES           AGE
+faces       httproute.gateway.networking.k8s.io/smiley     ["faces.local"]     6d
+faces       httproute.gateway.networking.k8s.io/color      ["faces.local"]     6d
+faces       httproute.gateway.networking.k8s.io/face       ["faces.local"]     6d
+
+NAMESPACE   NAME                                           HOSTNAMES           AGE
+faces       grpcroute.gateway.networking.k8s.io/faces-grpc ["grpc.faces.local"]  6d
+
+NAME                                              CONTROLLER                                   ACCEPTED   AGE
+gatewayclass.gateway.networking.k8s.io/eg         gateway.envoyproxy.io/gatewayclass-controller  True      6d
+gatewayclass.gateway.networking.k8s.io/istio      istio.io/gateway-controller                    True      6d
+----
+
+The `PROGRAMMED` and `ACCEPTED` columns are cheap lies of omission: they summarize the newest condition on the newest parent. Always follow up with `describe` on anything that looks off.
+
+==== Reading HTTPRoute Status
+
+[source,bash]
+----
+kubectl describe httproute smiley -n faces
+----
+
+The part you care about is `Status.Parents`. Each `parentRef` on the route gets one entry here, with up to three conditions: `Accepted`, `ResolvedRefs`, and (sometimes) `PartiallyInvalid`.
+
+A *healthy* route looks like this:
+
+[source,yaml]
+----
+Status:
+  Parents:
+    Controller Name:  gateway.envoyproxy.io/gatewayclass-controller
+    Parent Ref:
+      Group:      gateway.networking.k8s.io
+      Kind:       Gateway
+      Name:       faces
+      Namespace:  envoy-gateway
+    Conditions:
+      Last Transition Time:  2026-04-22T09:14:03Z
+      Message:               Route is accepted
+      Observed Generation:   3
+      Reason:                Accepted
+      Status:                True
+      Type:                  Accepted
+      Last Transition Time:  2026-04-22T09:14:03Z
+      Message:               Resolved all the Object references for the Route
+      Observed Generation:   3
+      Reason:                ResolvedRefs
+      Status:                True
+      Type:                  ResolvedRefs
+----
+
+A *broken* route with a missing backend Service looks like this:
+
+[source,yaml]
+----
+Conditions:
+  Reason:   Accepted
+  Status:   True
+  Type:     Accepted
+  Reason:   BackendNotFound
+  Message:  Service faces/smiley-v3 not found
+  Status:   False
+  Type:     ResolvedRefs
+----
+
+Things to notice:
+
+* `Accepted=True` and `ResolvedRefs=False` is the single most common state during development. It means the controller understood the route but cannot find a backend. Fix the `backendRef` name/namespace/port and it self-heals.
+* `Observed Generation` must match `metadata.generation`. If it doesn't, the controller hasn't caught up (or has crashed).
+* Every `parentRef` appears independently. A route attached to two gateways can be accepted by one and rejected by the other.
+
+==== Reading Gateway Status
+
+[source,bash]
+----
+kubectl describe gateway faces -n envoy-gateway
+----
+
+[source,yaml]
+----
+Status:
+  Addresses:
+    Type:   IPAddress
+    Value:  10.96.187.221
+  Conditions:
+    Reason:  Accepted
+    Status:  True
+    Type:    Accepted
+    Reason:  Programmed
+    Status:  True
+    Type:    Programmed
+  Listeners:
+    Attached Routes:  3
+    Conditions:
+      Reason:  Programmed
+      Status:  True
+      Type:   Programmed
+      Reason: ResolvedRefs
+      Status: True
+      Type:   ResolvedRefs
+    Name:   http
+    Supported Kinds:
+      Group:  gateway.networking.k8s.io
+      Kind:   HTTPRoute
+----
+
+`Attached Routes` is the number one "is this doing anything" metric. If you just applied an HTTPRoute and this counter did not go up, the route did not attach, period. Re-check the `parentRef` (correct `name`, `namespace`, `sectionName`) and the `Gateway`'s `allowedRoutes` selector.
+
+`Programmed=True` means the controller has pushed configuration to the data plane. `Programmed=False` with `Accepted=True` means the controller accepted the spec but the data plane (Envoy, Istio proxy) has not yet applied it — usually a transient rollout, occasionally a crashing pod.
+
+==== Extracting Status with jsonpath
+
+When you want a quick dashboard view without parsing YAML by eye:
+
+[source,bash]
+----
+kubectl get httproute -A -o jsonpath='{range .items[*]}{.metadata.namespace}{"/"}{.metadata.name}{"\t"}{.status.parents[0].conditions[?(@.type=="Accepted")].status}{"\t"}{.status.parents[0].conditions[?(@.type=="ResolvedRefs")].status}{"\n"}{end}'
+----
+
+Sample output:
+
+[source,bash]
+----
+faces/smiley    True    True
+faces/color     True    True
+faces/face      True    False
+----
+
+That third row is where your investigation starts.
+
+=== Route Conflict Resolution Debugging
+
+Gateway API's conflict resolution is deterministic but not obvious: when two routes match the same request with equal specificity, the *older* route wins. When two backends match the same rule, precedence is defined by the order in the spec.
+
+List every route targeting the same parent, with its creation time:
+
+[source,bash]
+----
+kubectl get httproute -A -o custom-columns=\
+NAMESPACE:.metadata.namespace,\
+NAME:.metadata.name,\
+PARENTS:.spec.parentRefs[*].name,\
+HOSTS:.spec.hostnames,\
+CREATED:.metadata.creationTimestamp \
+  --sort-by=.metadata.creationTimestamp
+----
+
+Sample:
+
+[source,bash]
+----
+NAMESPACE   NAME           PARENTS   HOSTS               CREATED
+faces       smiley-base    faces     [faces.local]       2026-04-15T08:00:12Z
+faces       smiley-canary  faces     [faces.local]       2026-04-22T11:30:44Z
+faces       smiley-expt    faces     [faces.local]       2026-04-22T14:02:19Z
+----
+
+If `smiley-canary` and `smiley-expt` both match `/smiley` with the same specificity, the canary wins because it was created first — even if the experiment is the one you just applied and "should" take over. The fix is either:
+
+* Delete and re-create the loser with a more specific match (header, query param, path prefix).
+* Delete the older route entirely if it was meant to be replaced.
+
+You can spot specificity ties by comparing the `matches` blocks:
+
+[source,bash]
+----
+kubectl get httproute -n faces -o jsonpath='{range .items[*]}{.metadata.name}{": "}{.spec.rules[*].matches}{"\n"}{end}'
+----
+
+=== Envoy Gateway Specific
+
+Envoy Gateway runs as a controller in `envoy-gateway-system` and spawns a data-plane Deployment per Gateway resource in the Gateway's own namespace (by default, `envoy-<gw-namespace>-<gw-name>-<hash>`).
+
+[source,bash]
+----
+kubectl get pods -n envoy-gateway-system
+kubectl get pods -A -l gateway.envoyproxy.io/owning-gateway-name=faces
+----
+
+==== Controller Logs
+
+[source,bash]
+----
+kubectl logs -n envoy-gateway-system deploy/envoy-gateway --tail=200
+kubectl logs -n envoy-gateway-system deploy/envoy-gateway -f | grep -E 'error|reconcile'
+----
+
+Look for `reconcile` lines for your Gateway's namespace/name, and for `xds` errors which indicate the controller built an invalid snapshot (usually because of a bad `EnvoyPatchPolicy`).
+
+==== Envoy Gateway CRDs
+
+Envoy Gateway layers several policy CRDs on top of Gateway API:
+
+[source,bash]
+----
+kubectl get envoyproxy,envoypatchpolicy,backendtrafficpolicy,securitypolicy,clienttrafficpolicy -A
+----
+
+* `EnvoyProxy` — infrastructure-level config (replicas, annotations, telemetry).
+* `BackendTrafficPolicy` — retries, timeouts, circuit breaking, rate limits targeted at a backend.
+* `SecurityPolicy` — JWT, OIDC, CORS, basic auth.
+* `ClientTrafficPolicy` — listener-level HTTP/TLS/TCP keepalive settings.
+* `EnvoyPatchPolicy` — raw Envoy xDS JSON patches. The escape hatch. When someone says "it works but the policy isn't taking effect," check here first.
+
+Describe the policy and look at `Status.Ancestors[*].Conditions` — same `Accepted`/`ResolvedRefs` pattern as HTTPRoute.
+
+==== Envoy Admin Interface
+
+Each Envoy data-plane pod exposes an admin listener on port 19000. Forward it:
+
+[source,bash]
+----
+ENVOY_POD=$(kubectl get pod -n envoy-gateway-system \
+  -l gateway.envoyproxy.io/owning-gateway-name=faces \
+  -o jsonpath='{.items[0].metadata.name}')
+
+kubectl port-forward -n envoy-gateway-system $ENVOY_POD 19000:19000
+----
+
+Then the useful endpoints:
+
+[source,bash]
+----
+# Full live config — huge, but the source of truth
+curl -s localhost:19000/config_dump | jq '.configs[] | select(."@type" | contains("RoutesConfigDump"))'
+
+# Which upstream clusters exist and their endpoints
+curl -s localhost:19000/clusters | head -50
+
+# Listeners (one per Gateway listener, typically on :10080 / :10443)
+curl -s localhost:19000/listeners
+
+# Prometheus-format stats
+curl -s localhost:19000/stats/prometheus | grep envoy_cluster_upstream_rq_total
+----
+
+What to look for:
+
+* In `/config_dump`, the `dynamic_route_configs` block should contain one virtual host per hostname, and each route rule should correspond to a matcher on an HTTPRoute.
+* In `/clusters`, each `backendRef` becomes a cluster whose name follows `httproute/<ns>/<name>/rule/<idx>/backend/<idx>`. If the cluster isn't there, the route never resolved.
+* `/stats/prometheus` with a grep for `upstream_rq_5xx` or `upstream_rq_timeout` is the fastest way to tell a broken upstream from a broken route.
+
+==== egctl
+
+If you have `egctl` (the Envoy Gateway CLI) installed, it wraps the admin endpoints with Gateway API semantics:
+
+[source,bash]
+----
+egctl config envoy-proxy all -n envoy-gateway
+egctl experimental translate --from gateway-api --to xds --file httproute.yaml
+egctl x status
+----
+
+`egctl x status` is particularly useful — it correlates Gateway API resources with the Envoy configuration actually running, so "my route is accepted but traffic doesn't reach the backend" becomes obvious (usually a missing xDS cluster for a not-yet-ready Service).
+
+=== Istio Specific
+
+Istio's debugging story is centered on `istioctl` because the sidecar model means every pod has its own view of the config.
+
+==== Cluster-Wide Proxy State
+
+[source,bash]
+----
+istioctl proxy-status
+----
+
+Sample:
+
+[source,bash]
+----
+NAME                                CDS      LDS      EDS      RDS      ECDS      ISTIOD
+face-abc.faces                      SYNCED   SYNCED   SYNCED   SYNCED   NOT SENT  istiod-7c-xzp
+smiley-def.faces                    SYNCED   SYNCED   SYNCED   STALE    NOT SENT  istiod-7c-xzp
+istio-ingressgateway-xyz.istio-system SYNCED SYNCED   SYNCED   SYNCED   NOT SENT  istiod-7c-xzp
+----
+
+`STALE` on any column means the proxy has not ACKed the latest config push. A single stale pod is usually a restart in progress; many stale pods at once suggests `istiod` is under load or the push was rejected.
+
+==== Per-Pod Proxy Config
+
+[source,bash]
+----
+istioctl proxy-config routes face-abc -n faces
+istioctl proxy-config listeners face-abc -n faces
+istioctl proxy-config clusters face-abc -n faces
+istioctl proxy-config endpoints face-abc -n faces
+----
+
+What to look for:
+
+* `routes` — confirm your HTTPRoute's hostnames appear as virtual hosts and that match rules have the expected `pathPrefix`/`header` predicates. Add `-o json` for the full picture.
+* `listeners` — the ingress gateway should have a listener on the Gateway's configured port. For sidecars, look for the `0.0.0.0_15001` virtualOutbound listener.
+* `clusters` — one per Service + port + subset. A missing cluster means the Service doesn't exist or isn't selected by the sidecar.
+* `endpoints` — tells you whether the cluster has any ready pods behind it. If `clusters` shows a cluster but `endpoints` is empty, it's a readiness/selector problem, not a routing problem.
+
+==== Analyze
+
+[source,bash]
+----
+istioctl analyze -n faces
+istioctl analyze -A
+----
+
+`analyze` runs ~50 canned checks — missing sidecar injection, conflicting VirtualServices, mTLS misconfigurations, Gateway API parent refs that don't resolve. Always run it before filing a bug.
+
+==== Sidecar Injection
+
+If a route has no effect, check that the pods behind the backend service have sidecars:
+
+[source,bash]
+----
+kubectl get ns faces -o jsonpath='{.metadata.labels}' | jq
+# expect: {"istio-injection": "enabled"}  or  {"istio.io/rev": "default"}
+
+kubectl get pod -n faces face-abc -o jsonpath='{.spec.containers[*].name}'
+# expect two names including "istio-proxy"
+----
+
+Without the namespace label (or a pod-level `sidecar.istio.io/inject: "true"` annotation), the pod runs unmeshed and Istio's routing does not apply to its *inbound* traffic. Pods created before the label was added will need to be restarted.
+
+=== Linkerd Specific
+
+Linkerd is cooperating with Envoy Gateway in this workshop: Envoy handles north-south at the edge, Linkerd handles east-west mTLS and mesh-scoped HTTPRoutes (the `policy.linkerd.io/HTTPRoute` kind, not the Gateway API kind).
+
+==== Control Plane Health
+
+[source,bash]
+----
+linkerd check
+linkerd check --proxy -n faces
+----
+
+`--proxy` is the crucial one when debugging an app: it verifies each meshed pod's proxy is healthy, has valid certs, and is talking to the identity service.
+
+==== Observability
+
+[source,bash]
+----
+linkerd viz stat deploy -n faces
+linkerd viz routes -n faces deploy/face --to deploy/smiley
+linkerd viz tap -n faces deploy/face
+linkerd viz top -n faces deploy/face
+----
+
+* `stat` — RPS, success rate, p50/p95/p99 per deployment. If success rate is <100% and you didn't expect that, drill in.
+* `routes` — per-route success and latency for a specific caller/callee pair. This is where you confirm your `policy.linkerd.io/HTTPRoute` timeouts are actually being applied (you'll see routes named after the route's `matches`).
+* `tap` — live request stream. One line per request with method, path, status, latency. Irreplaceable for confirming "is this request even happening."
+* `top` — aggregated tap, grouped by route.
+
+==== Is a Pod Meshed?
+
+[source,bash]
+----
+kubectl get pod -n faces face-abc -o jsonpath='{.spec.containers[*].name}'
+# expect: face linkerd-proxy
+----
+
+Or more directly:
+
+[source,bash]
+----
+kubectl get pod -n faces -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.containers[*].name}{"\n"}{end}' \
+  | grep -v linkerd-proxy
+----
+
+Anything printed is *not* meshed. For Linkerd routing to take effect on the inbound side, the destination pod must be meshed. Namespace-level injection is set via the `linkerd.io/inject: enabled` annotation (note: annotation, not label — different from Istio).
+
+==== Linkerd and Gateway API Gotcha
+
+The `policy.linkerd.io/HTTPRoute` kind predates Gateway API's `gateway.networking.k8s.io/HTTPRoute` and the two coexist in the cluster. When you `kubectl get httproute`, you get both. Disambiguate:
+
+[source,bash]
+----
+kubectl get httproutes.gateway.networking.k8s.io -A
+kubectl get httproutes.policy.linkerd.io -A
+----
+
+=== Tracing a Request End-to-End
+
+When condition-chasing has told you the control plane thinks everything is fine, you need to see a real request.
+
+==== Exec Into a Pod and Curl
+
+[source,bash]
+----
+kubectl exec -n faces deploy/face -c face -- curl -sv http://smiley/ 2>&1 | head -30
+----
+
+You're looking at three things in the verbose output:
+
+* DNS resolution — `Trying 10.x.x.x:80`. If this is a ClusterIP, the Service exists.
+* TLS (or not) — `upgrade: h2c` or `ALPN accepted: h2`. In Linkerd, direct pod-to-pod is mTLS transparently; you won't see TLS in curl's output because the proxy terminates it.
+* Response headers — `l5d-proxy-version`, `server: envoy`, or `x-envoy-upstream-service-time` tell you which proxy handled the response. If you expected the request to go through Envoy Gateway and there's no `server: envoy` header, it didn't.
+
+==== Header-Based A/B Routing
+
+The Faces workshop routes on `X-Faces-User`:
+
+[source,bash]
+----
+kubectl exec -n faces deploy/face -c face -- \
+  curl -s -H "X-Faces-User: heart" http://smiley/ | jq .
+
+kubectl exec -n faces deploy/face -c face -- \
+  curl -s -H "X-Faces-User: nobody" http://smiley/ | jq .
+----
+
+Compare the `version` or `pod` field in the response to confirm the header steered you to the `heart` variant. If both headers return the same backend, the route with the header match either didn't attach (check `Accepted`) or lost specificity resolution to an older route (see section 2).
+
+==== Verifying Timeouts
+
+With a slow endpoint (Faces ships `/slow` on the smiley service):
+
+[source,bash]
+----
+time kubectl exec -n faces deploy/face -c face -- \
+  curl -s -o /dev/null -w "%{http_code}\n" http://smiley/slow
+----
+
+If your `HTTPRoute.spec.rules[].timeouts.request` is `2s`, the command should return a `504` (or `408`, depending on the mesh) in just over two seconds. Anything longer means the timeout did not apply — in Linkerd's case, confirm the destination Service's port has a name that matches what the `policy.linkerd.io/HTTPRoute` references.
+
+==== Packet-Level Inspection
+
+When everything else has failed, `tcpdump` inside the proxy container or `ksniff` can confirm that bytes are (or aren't) leaving the pod. This is a last resort — almost every problem is visible higher up the stack — but knowing it exists is worth a sentence:
+
+[source,bash]
+----
+kubectl sniff -n faces face-abc -c istio-proxy -f "port 80"
+----
+
+=== Common Failure Modes and Fixes
+
+[cols="2,3,3", options="header"]
+|===
+| Symptom | Likely Cause | Fix
+
+| HTTPRoute shows `Accepted=False`, Reason `NotAllowedByListeners`
+| Gateway's `allowedRoutes.namespaces` doesn't select the route's namespace, or the route's `parentRef.sectionName` doesn't match a listener.
+| Add the namespace to the Gateway selector, or correct `sectionName` on the route.
+
+| `Accepted=True`, `ResolvedRefs=False`, Reason `BackendNotFound`
+| Backend Service doesn't exist, is in a different namespace without a `ReferenceGrant`, or the port number/name is wrong.
+| Fix `backendRef.name`/`namespace`/`port`. For cross-namespace, create a `ReferenceGrant`.
+
+| Route applied, status is healthy, but traffic doesn't change
+| Sidecar injection missing on the destination (Istio), or pod predates the injection label.
+| Label namespace, restart pods: `kubectl rollout restart deploy -n faces`.
+
+| Linkerd `policy.linkerd.io/HTTPRoute` timeouts not applied
+| Service port has no `name`, or the route's `parentRef` uses a different port name than the Service declares.
+| Give every port in the Service a `name` and match it exactly in the route.
+
+| Istio route not applied even though `istioctl analyze` is clean
+| `istioctl proxy-status` shows `STALE` or a pod is unmeshed.
+| Restart the pod; confirm `istio-proxy` is in `kubectl get pod -o jsonpath='{.spec.containers[*].name}'`.
+
+| 404 at the ingress with no matching log line
+| Gateway listener hostname doesn't match the `Host` header, or the request hit the wrong port (HTTP vs HTTPS).
+| Check `Gateway.spec.listeners[*].hostname` and the `HTTPRoute.spec.hostnames` intersection; check the port you sent the request to.
+
+| Canary weights don't sum to 100, controller shrugs
+| Spec-legal: Gateway API normalizes weights proportionally. `{50, 50}` and `{1, 1}` are equivalent.
+| Nothing to fix, but prefer 100 for readability and alignment with percentages in dashboards.
+
+| Two routes with identical match rules; the wrong one wins
+| Conflict resolution rule: older `creationTimestamp` wins when specificity ties.
+| Delete the loser and re-create, or make one rule more specific (add a header or query-param match).
+
+| Envoy Gateway: `EnvoyPatchPolicy` applied but no change in `/config_dump`
+| Patch target path is wrong or JSON patch op failed silently.
+| Check `kubectl describe envoypatchpolicy` — status carries per-patch errors.
+
+| `GRPCRoute` works in code but `grpcurl` from outside says UNAVAILABLE
+| Listener is HTTP/1.1 only, or the Gateway's `protocol` is `HTTP` instead of `HTTPS`+ALPN for h2.
+| Set listener `protocol: HTTPS` with TLS, or `HTTP` with `appProtocol: kubernetes.io/h2c` on the backend service.
+|===
+
+=== Quick Health-Check One-Liner
+
+Drop this in a shell or save it as `gateway-api-health.sh`. It walks every `HTTPRoute` and `GRPCRoute` in the cluster and prints the two conditions that matter most:
+
+[source,bash]
+----
+#!/usr/bin/env bash
+# Prints Accepted / ResolvedRefs per parent for every HTTPRoute and GRPCRoute.
+# Exit code is non-zero if anything is not fully healthy.
+
+set -uo pipefail
+
+bad=0
+
+check_kind() {
+  local kind="$1"
+  printf "\n== %s ==\n" "$kind"
+  printf "%-24s %-32s %-28s %-10s %-12s\n" "NAMESPACE" "NAME" "PARENT" "ACCEPTED" "RESOLVEDREFS"
+
+  kubectl get "$kind" -A -o json | jq -r '
+    .items[] as $r |
+    ($r.status.parents // [])[] |
+    [
+      $r.metadata.namespace,
+      $r.metadata.name,
+      (.parentRef.namespace // $r.metadata.namespace) + "/" + .parentRef.name,
+      ((.conditions[]? | select(.type=="Accepted").status) // "?"),
+      ((.conditions[]? | select(.type=="ResolvedRefs").status) // "?")
+    ] | @tsv
+  ' | while IFS=$'\t' read -r ns name parent accepted resolved; do
+    printf "%-24s %-32s %-28s %-10s %-12s\n" "$ns" "$name" "$parent" "$accepted" "$resolved"
+    if [[ "$accepted" != "True" || "$resolved" != "True" ]]; then
+      bad=1
+    fi
+  done
+}
+
+check_kind httproutes.gateway.networking.k8s.io
+check_kind grpcroutes.gateway.networking.k8s.io
+
+printf "\n== Gateways ==\n"
+printf "%-24s %-24s %-12s %-12s %s\n" "NAMESPACE" "NAME" "ACCEPTED" "PROGRAMMED" "ADDRESS"
+kubectl get gateway -A -o json | jq -r '
+  .items[] |
+  [
+    .metadata.namespace,
+    .metadata.name,
+    ((.status.conditions[]? | select(.type=="Accepted").status) // "?"),
+    ((.status.conditions[]? | select(.type=="Programmed").status) // "?"),
+    ((.status.addresses[0].value) // "-")
+  ] | @tsv
+' | while IFS=$'\t' read -r ns name accepted programmed addr; do
+  printf "%-24s %-24s %-12s %-12s %s\n" "$ns" "$name" "$accepted" "$programmed" "$addr"
+  if [[ "$accepted" != "True" || "$programmed" != "True" ]]; then
+    bad=1
+  fi
+done
+
+exit $bad
+----
+
+Sample healthy output:
+
+[source,bash]
+----
+== httproutes.gateway.networking.k8s.io ==
+NAMESPACE                NAME                             PARENT                       ACCEPTED   RESOLVEDREFS
+faces                    smiley                           envoy-gateway/faces          True       True
+faces                    color                            envoy-gateway/faces          True       True
+faces                    face                             envoy-gateway/faces          True       True
+
+== grpcroutes.gateway.networking.k8s.io ==
+NAMESPACE                NAME                             PARENT                       ACCEPTED   RESOLVEDREFS
+faces                    faces-grpc                       istio-system/ingress         True       True
+
+== Gateways ==
+NAMESPACE                NAME                     ACCEPTED     PROGRAMMED   ADDRESS
+envoy-gateway            faces                    True         True         10.96.187.221
+istio-system             ingress                  True         True         10.96.42.7
+----
+
+Wire it into CI as a post-deploy smoke test and you will catch the 80% of Gateway API problems that show up as a bad condition before any user ever sees them.
+
+== Appendix: full file inventory
+
+For reference, every source file from the original workshop repo was used verbatim in this document. The table below maps each file to the section where it appears.
+
+[cols="3,3", options="header"]
+|===
+| Original path | Section
+
+| `README.md`                                            | Entire workshop narrative
+| `create-cluster.sh`                                    | "Creating a local cluster"
+| `demosh/check-requirements.sh`                         | "Prerequisites"
+| `gateway-api/experimental-install.yaml`                | "Installing the Gateway API CRDs" (referenced; CRD bundle)
+| `gateway-api/gateway.networking.k8s.io_grpcroutes.yaml`| (bundled with `experimental-install.yaml`)
+| `faces/values.yaml`                                    | "Installing Faces"
+| `k8s/namespaces.yaml`                                  | "Installing Faces"
+| `istio/install.md`                                     | "Path B: Istio"
+| `istio/setup-namespace.md`                             | "Path B: Istio"
+| `istio/create-gateway.md`                              | "Path B: Istio"
+| `istio/gateway.yaml`                                   | "Path B: Istio"
+| `istio/get-ingress-ip.sh`                              | "Path B: Istio"
+| `linkerd/install.md`                                   | "Path A: Linkerd + Envoy Gateway"
+| `linkerd/setup-namespace.md`                           | "Path A: Linkerd + Envoy Gateway"
+| `linkerd/create-gateway.md`                            | "Path A: Linkerd + Envoy Gateway"
+| `linkerd/gatewayclass-and-gateway.yaml`                | "Path A: Linkerd + Envoy Gateway"
+| `linkerd/get-ingress-ip.sh`                            | "Path A: Linkerd + Envoy Gateway"
+| `k8s/01-base/gui-route.yaml`                           | Stage 1
+| `k8s/01-base/face-route.yaml`                          | Stage 1
+| `k8s/02-unconditional/smiley-simplest.yaml`            | Stage 2
+| `k8s/02-unconditional/smiley-route.yaml`               | Stage 2
+| `k8s/02-unconditional/color-route.yaml`                | Stage 2
+| `k8s/03-canary/smiley-canary-10.yaml`                  | Stage 3
+| `k8s/03-canary/smiley-canary-50.yaml`                  | Stage 3
+| `k8s/03-canary/smiley-canary-100.yaml`                 | Stage 3
+| `k8s/03-canary/color-canary-25.yaml`                   | Stage 3
+| `k8s/03-canary/color-canary-50.yaml`                   | Stage 3
+| `k8s/03-canary/smiley-edge.yaml`                       | Stage 3
+| `k8s/03-canary/smiley-edge-canary-50.yaml`             | Stage 3
+| `k8s/03-canary/smiley-replacement.yaml`                | Stage 3
+| `k8s/03-canary/color-edge.yaml`                        | Stage 3
+| `k8s/04-abtest/smiley-ab.yaml`                         | Stage 4
+| `k8s/04-abtest/smiley2-unconditional.yaml`             | Stage 4
+| `k8s/04-abtest/color-ab.yaml`                          | Stage 4
+| `k8s/05-timeouts/face-route.yaml`                      | Stage 5
+| `k8s/05-timeouts/smiley-timeout-istio.yaml`            | Stage 5
+| `k8s/05-timeouts/smiley-timeout-linkerd.yaml`          | Stage 5
+| `k8s/05-timeouts/color-timeout-istio.yaml`             | Stage 5
+| `k8s/05-timeouts/color-timeout-linkerd.yaml`           | Stage 5
+|===
+
+'''
+
+_Attribution: the underlying workshop content is `SPDX-FileCopyrightText: 2022-2024 Buoyant Inc.`, licensed `Apache-2.0`. This consolidated version preserves the original structure and code with added debugging/ops material._
