@@ -1,0 +1,57 @@
+# STRATEGY B (staging) — traefik 3.7.1 (chart 40.1.0+) in its OWN namespace (e.g. traefik),
+# on a TEMPORARY auto-assigned Azure IP, for validation while ingress-nginx still serves prod.
+# later you release the prod static IP from nginx and re-claim it here via azure-pip-name
+# (see traefik-nginx-migration-azure-ip-reuse.md, strategy B phase 2 + values-azure-ipmove-prod.yaml).
+#
+# install:
+#   helm install traefik traefik/traefik -n traefik --create-namespace --version 40.1.0 -f values-azure-ipmove-stage.yaml
+
+deployment:
+  kind: DaemonSet
+
+providers:
+  kubernetesIngressNGINX:
+    enabled: true
+    controllerClass: k8s.io/ingress-nginx
+    publishService:
+      enabled: false           # don't fight nginx over Ingress .status during coexistence
+  kubernetesCRD:
+    enabled: true
+  kubernetesIngress:
+    enabled: false
+  kubernetesGateway:
+    enabled: false
+
+ingressClass:
+  enabled: true
+  isDefaultClass: false        # don't steal default while nginx is live
+
+service:
+  spec:
+    type: LoadBalancer
+    externalTrafficPolicy: Local
+    # NO ip pin here -> azure assigns a throwaway IP for validation.
+    # the prod IP gets pinned in values-azure-ipmove-prod.yaml at cutover.
+
+ports:
+  web:
+    exposedPort: 80
+  websecure:
+    exposedPort: 443
+    http:
+      tls:
+        enabled: true
+
+logs:
+  general:
+    level: INFO
+  access:
+    enabled: true
+    format: json
+
+metrics:
+  prometheus:
+    service:
+      enabled: true
+    serviceMonitor:
+      enabled: true

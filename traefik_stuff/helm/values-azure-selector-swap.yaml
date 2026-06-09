@@ -1,0 +1,66 @@
+# STRATEGY A — traefik 3.7.1 (chart 40.1.0+) installed INTO the ingress-nginx namespace,
+# with NO LoadBalancer Service of its own. the existing ingress-nginx-controller Service
+# is later patched (selector + targetPort) to point at these traefik pods, so the Azure
+# LB + public IP never change and DNS is never touched.
+#
+# install:
+#   helm install traefik traefik/traefik -n ingress-nginx --version 40.1.0 -f values-azure-selector-swap.yaml
+# then cut over with the selector patch (see traefik-nginx-migration-azure-ip-reuse.md, strategy A phase 3).
+
+deployment:
+  kind: DaemonSet            # externalTrafficPolicy: Local needs a ready pod on every LB-backend node
+  podLabels:
+    ingress-cutover/controller: traefik
+
+# CRITICAL: do NOT let the chart create a second Azure LoadBalancer.
+# the kept ingress-nginx-controller Service provides the LB + IP.
+service:
+  enabled: false
+
+providers:
+  kubernetesIngressNGINX:
+    enabled: true
+    ingressClass: nginx
+    controllerClass: k8s.io/ingress-nginx
+    # stamp the KEPT nginx Service's LB ip into Ingress .status (external-dns / tooling read it).
+    # keep enabled:false while nginx still serves (avoids status flapping); flip true at cutover.
+    publishService:
+      enabled: false
+      pathOverride: ingress-nginx/ingress-nginx-controller
+    # 3.7 default is true; flip to false ONLY if a nginx-lenient pathType gets rejected:
+    # strictValidatePathType: false
+  kubernetesCRD:
+    enabled: true            # allow adding native Middleware/IngressRoute later
+  kubernetesIngress:
+    enabled: false           # nginx provider already owns the nginx class
+  kubernetesGateway:
+    enabled: false
+
+# in-pod entrypoint ports. the kept Service must target these (targetPort 8000 / 8443).
+ports:
+  web:
+    port: 8000
+    expose:
+      default: false
+  websecure:
+    port: 8443
+    expose:
+      default: false
+
+logs:
+  general:
+    level: INFO
+  access:
+    enabled: true
+    format: json
+
+metrics:
+  prometheus:
+    service:
+      enabled: true
+    serviceMonitor:
+      enabled: true
+
+resources:
+  requests: { cpu: 200m, memory: 256Mi }
+  limits:   { cpu: 1000m, memory: 1Gi }

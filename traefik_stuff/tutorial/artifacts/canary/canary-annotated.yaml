@@ -1,0 +1,23 @@
+# automatic path: nginx canary annotations. a SECOND Ingress, same host,
+# marked canary with a weight. traefik's compat provider builds the weighted split.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: httpbin-canary
+  namespace: httpbin
+  annotations:
+    nginx.ingress.kubernetes.io/canary: "true"
+    nginx.ingress.kubernetes.io/canary-weight: "20"     # 20% to v2
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: httpbin.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: httpbin-v2
+                port:
+                  number: 80

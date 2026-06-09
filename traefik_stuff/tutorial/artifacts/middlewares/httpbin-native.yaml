@@ -1,0 +1,60 @@
+# native path: the SAME behavior as the annotations, expressed as reusable
+# Middleware + IngressRoute. this is what a post-migration refactor looks like.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: ratelimit
+  namespace: httpbin
+spec:
+  rateLimit:
+    average: 5
+    period: 1s
+    burst: 5
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: inflight
+  namespace: httpbin
+spec:
+  inFlightReq:
+    amount: 10
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: ip-allowlist
+  namespace: httpbin
+spec:
+  ipAllowList:
+    sourceRange: ["10.0.0.0/8", "127.0.0.1/32"]
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: redirect-https
+  namespace: httpbin
+spec:
+  redirectScheme:
+    scheme: https
+    permanent: true
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: httpbin-native
+  namespace: httpbin
+spec:
+  entryPoints: [websecure]
+  routes:
+    - match: Host(`httpbin.example.com`)
+      kind: Rule
+      middlewares:
+        - name: ip-allowlist      # order matters: allowlist before doing work
+        - name: inflight
+        - name: ratelimit
+      services:
+        - name: httpbin
+          port: 80
+  tls:
+    secretName: httpbin-tls

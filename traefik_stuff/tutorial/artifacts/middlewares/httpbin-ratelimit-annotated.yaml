@@ -1,0 +1,30 @@
+# automatic path: add nginx rate-limit + ip-allowlist annotations.
+# traefik builds rateLimit + ipAllowList middlewares from these. no traefik yaml.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: httpbin
+  namespace: httpbin
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/limit-rps: "5"                  # -> rateLimit middleware
+    nginx.ingress.kubernetes.io/limit-connections: "10"        # -> inFlightReq middleware
+    nginx.ingress.kubernetes.io/whitelist-source-range: "10.0.0.0/8,127.0.0.1/32"  # -> ipAllowList
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "https://ui.example.com"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [ httpbin.example.com ]
+      secretName: httpbin-tls
+  rules:
+    - host: httpbin.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: httpbin
+                port:
+                  number: 80

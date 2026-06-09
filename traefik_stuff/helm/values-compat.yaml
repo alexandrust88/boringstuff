@@ -1,0 +1,50 @@
+# traefik 3.7.1 (chart 40.1.0+) — nginx-replacement / coexistence profile.
+# install ALONGSIDE ingress-nginx, serve the same Ingress objects, cut over via dns.
+deployment:
+  replicas: 2
+
+providers:
+  kubernetesIngressNGINX:
+    enabled: true
+    controllerClass: "k8s.io/ingress-nginx"   # match your Ingress objects' controller
+    publishService:
+      enabled: false          # IMPORTANT during coexistence: don't fight nginx over Ingress .status
+  kubernetesCRD:
+    enabled: true             # allow adding native Middleware/IngressRoute later
+  kubernetesIngress:
+    enabled: false            # nginx provider already owns the nginx class
+
+ingressClass:
+  enabled: true
+  isDefaultClass: false       # flip to true only after nginx is gone
+
+service:
+  spec:
+    type: LoadBalancer
+
+ports:
+  web:
+    exposedPort: 80
+  websecure:
+    exposedPort: 443
+    http:
+      tls:
+        enabled: true
+
+metrics:
+  prometheus:
+    service:
+      enabled: true
+    serviceMonitor:
+      enabled: true
+
+logs:
+  general:
+    level: INFO
+  access:
+    enabled: true
+    format: json
+
+resources:
+  requests: { cpu: 200m, memory: 256Mi }
+  limits:   { cpu: 1000m, memory: 1Gi }

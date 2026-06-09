@@ -1,0 +1,40 @@
+# traefik 3.7.1 in nginx-compat mode, coexisting with ingress-nginx.
+deployment:
+  replicas: 2
+
+providers:
+  # the star of the show: read existing nginx Ingress objects + annotations
+  kubernetesIngressNGINX:
+    enabled: true
+    controllerClass: "k8s.io/ingress-nginx"
+    publishService:
+      enabled: false          # IMPORTANT: don't fight nginx over Ingress .status
+  kubernetesCRD:
+    enabled: true             # so we can add native Middleware/IngressRoute later
+  kubernetesIngress:
+    enabled: false            # nginx provider already owns the nginx class
+
+ingressClass:
+  enabled: true
+  isDefaultClass: false       # don't steal "default" while nginx is still live
+
+service:
+  spec:
+    type: LoadBalancer
+
+# expose traefik's data plane on spare host ports so it doesn't collide with nginx on 80/443
+ports:
+  web:
+    exposedPort: 8000
+  websecure:
+    exposedPort: 8443
+
+metrics:
+  prometheus:
+    service:
+      enabled: true
+
+logs:
+  access:
+    enabled: true
+    format: json

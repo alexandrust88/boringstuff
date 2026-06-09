@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# create a local k3d cluster for the traefik-vs-nginx course.
+# k3s ships traefik v2 by default — we DISABLE it so we control traefik ourselves.
+set -euo pipefail
+
+CLUSTER="${CLUSTER:-traefik-course}"
+
+# --disable=traefik : turn off k3s' bundled traefik (we install 3.7.1 ourselves)
+# map host 80/443 -> ingress; map 8000/8443 as spare for parallel-controller testing
+k3d cluster create "$CLUSTER" \
+  --k3s-arg "--disable=traefik@server:0" \
+  --port "80:80@loadbalancer" \
+  --port "443:443@loadbalancer" \
+  --port "8000:8000@loadbalancer" \
+  --port "8443:8443@loadbalancer" \
+  --agents 2
+
+kubectl cluster-info
+kubectl get nodes
+echo "cluster '$CLUSTER' ready. k3s bundled traefik is DISABLED."

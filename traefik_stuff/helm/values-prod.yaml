@@ -1,0 +1,83 @@
+# traefik 3.7.1 (chart 40.1.0+) — production overlay (post-migration / native).
+# layer on top of values-compat.yaml, or use standalone once nginx is gone.
+deployment:
+  replicas: 3
+  podAnnotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9100"
+
+providers:
+  kubernetesIngressNGINX:
+    enabled: true
+    publishService:
+      enabled: true            # traefik owns Ingress .status now (nginx gone)
+  kubernetesCRD:
+    enabled: true
+    allowCrossNamespace: true
+
+ingressClass:
+  enabled: true
+  isDefaultClass: true         # traefik is THE controller now
+
+service:
+  spec:
+    type: LoadBalancer
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+
+affinity:
+  podAntiAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchLabels: { app.kubernetes.io/name: traefik }
+        topologyKey: kubernetes.io/hostname
+
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: ScheduleAnyway
+    labelSelector:
+      matchLabels: { app.kubernetes.io/name: traefik }
+
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 80 }
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+
+securityContext:
+  capabilities:
+    drop: ["ALL"]
+    add: ["NET_BIND_SERVICE"]
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+
+metrics:
+  prometheus:
+    service: { enabled: true }
+    serviceMonitor: { enabled: true }
+
+logs:
+  general: { level: INFO }
+  access: { enabled: true, format: json }
+
+resources:
+  requests: { cpu: 500m, memory: 512Mi }
+  limits:   { cpu: 2000m, memory: 2Gi }
+
+# dashboard stays OFF by default — expose behind auth + ipAllowList only.
+ingressRoute:
+  dashboard:
+    enabled: false

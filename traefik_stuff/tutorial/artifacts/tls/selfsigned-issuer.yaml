@@ -1,0 +1,20 @@
+# a self-signed issuer for the lab (use a real ClusterIssuer / letsencrypt in prod)
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: httpbin-tls
+  namespace: httpbin
+spec:
+  secretName: httpbin-tls          # traefik (and nginx) reference this Secret
+  issuerRef:
+    name: selfsigned
+    kind: ClusterIssuer
+  dnsNames:
+    - httpbin.example.com

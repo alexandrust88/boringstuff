@@ -1,0 +1,31 @@
+# native path: a TraefikService weighted split, referenced by one IngressRoute.
+apiVersion: traefik.io/v1alpha1
+kind: TraefikService
+metadata:
+  name: httpbin-split
+  namespace: httpbin
+spec:
+  weighted:
+    services:
+      - name: httpbin
+        port: 80
+        weight: 80
+      - name: httpbin-v2
+        port: 80
+        weight: 20
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: httpbin-canary-native
+  namespace: httpbin
+spec:
+  entryPoints: [websecure]
+  routes:
+    - match: Host(`httpbin.example.com`)
+      kind: Rule
+      services:
+        - name: httpbin-split
+          kind: TraefikService
+  tls:
+    secretName: httpbin-tls

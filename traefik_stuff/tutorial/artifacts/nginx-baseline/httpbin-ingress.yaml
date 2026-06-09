@@ -1,0 +1,27 @@
+# a real, annotation-rich nginx Ingress. this is what we migrate.
+# we will NOT change this file when traefik takes over.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: httpbin
+  namespace: httpbin
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"          # http for now
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "30"
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "https://ui.example.com"
+    nginx.ingress.kubernetes.io/whitelist-source-range: "0.0.0.0/0"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: httpbin.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: httpbin
+                port:
+                  number: 80

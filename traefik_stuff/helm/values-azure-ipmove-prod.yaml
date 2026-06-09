@@ -1,0 +1,29 @@
+# STRATEGY B (cutover overlay) — pins the EXISTING Azure static public IP onto traefik's
+# Service and makes traefik the authoritative controller. layer ON TOP of the stage values:
+#
+#   helm upgrade traefik traefik/traefik -n traefik --version 40.1.0 \
+#     -f values-azure-ipmove-stage.yaml -f values-azure-ipmove-prod.yaml
+#
+# REQUIRED: the prod static IP must already be RELEASED from the nginx Service first
+# (one Standard IP attaches to one Service frontend at a time). See strategy B phase 2.
+# Replace <PIP_NAME> and <PIP_RG> with your real public-ip name + resource group.
+
+service:
+  annotations:
+    service.beta.kubernetes.io/azure-pip-name: "<PIP_NAME>"
+    # required if the public IP lives in the MC_* node RG or any non-default RG;
+    # the cluster identity needs Network Contributor on that RG.
+    service.beta.kubernetes.io/azure-load-balancer-resource-group: "<PIP_RG>"
+    # alternative to azure-pip-name (pin by address instead of name):
+    # service.beta.kubernetes.io/azure-load-balancer-ipv4: "<PROD_IP>"
+  spec:
+    type: LoadBalancer
+    externalTrafficPolicy: Local
+
+providers:
+  kubernetesIngressNGINX:
+    publishService:
+      enabled: true            # traefik now owns Ingress .status (nginx out of the path)
+
+ingressClass:
+  isDefaultClass: true         # traefik is THE controller now

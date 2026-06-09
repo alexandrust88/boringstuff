@@ -1,0 +1,34 @@
+site_name: traefik as an nginx-ingress replacement
+site_description: hands-on course — deploy traefik v3.7.1, replace ingress-nginx with zero manifest rewrites, migrate, harden.
+
+theme:
+  name: material
+  features:
+    - content.code.copy
+    - navigation.sections
+
+markdown_extensions:
+  - admonition
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.snippets:
+      base_path: ["artifacts"]
+  - pymdownx.emoji
+
+extra:
+  traefik:
+    chart_version: "40.1.0"
+    app_version: "v3.7.1"
+
+nav:
+  - Introduction: index.md
+  - Setup (k3d): setup.md
+  - The nginx baseline: nginx-baseline.md
+  - Getting started with traefik: getting-started.md
+  - Flip nginx ingresses to traefik: migrate-ingress.md
+  - HTTPS & cert-manager: https.md
+  - Middlewares (annotations, the native way): middlewares.md
+  - Canary / weighted traffic: canary.md
+  - Rate limiting: ratelimit.md
+  - Decommission nginx: decommission.md
+  - Takeaways: takeaways.md

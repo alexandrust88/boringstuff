@@ -1,0 +1,30 @@
+# a v2 backend to canary toward
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: httpbin-v2
+  namespace: httpbin
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: httpbin-v2 }
+  template:
+    metadata:
+      labels: { app: httpbin-v2 }
+    spec:
+      containers:
+        - name: httpbin
+          image: kennethreitz/httpbin:latest
+          env:
+            - name: VERSION
+              value: "v2"
+          ports: [{ containerPort: 80 }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: httpbin-v2
+  namespace: httpbin
+spec:
+  selector: { app: httpbin-v2 }
+  ports: [{ name: http, port: 80, targetPort: 80 }]

@@ -1,0 +1,30 @@
+# same nginx Ingress, now with TLS + ssl-redirect. STILL an nginx Ingress.
+# traefik's compat provider terminates TLS using spec.tls[].secretName and
+# turns ssl-redirect into an http->https redirect — no traefik-specific yaml.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: httpbin
+  namespace: httpbin
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"        # now redirect http->https
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "https://ui.example.com"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [ httpbin.example.com ]
+      secretName: httpbin-tls          # the cert-manager-issued Secret
+  rules:
+    - host: httpbin.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: httpbin
+                port:
+                  number: 80
