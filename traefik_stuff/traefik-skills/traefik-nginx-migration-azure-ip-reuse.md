@@ -1,5 +1,8 @@
 # traefik - replace nginx on azure aks, same public ip, no dns change
 
+> **superseded for the same-namespace case:** [traefik-nginx-migration-azure-zero-downtime.md](traefik-nginx-migration-azure-zero-downtime.md) (v2) achieves **true zero downtime with a gradual canary** through the same Service via named targetPorts — prefer it over strategy A below. this doc remains authoritative for **strategy B (move the static ip)** when traefik must live in its own namespace.
+> known issue fixed in v2: the selector patches below originally used merge patches; selector replacement **must** use a json `replace` op (merge keeps old selector keys → selector matches nothing). the scripts in `helm/` are corrected.
+
 replace **ingress-nginx** with **traefik v3.7.1** on **azure aks** where:
 
 - traefik runs in **nginx-compat mode** (`kubernetesIngressNGINX` provider), NOT gateway-api/envoy mode
