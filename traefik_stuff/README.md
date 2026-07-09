@@ -20,7 +20,8 @@ traefik_stuff/
 ├── traefik-skills/           reference docs (the lookup tables)
 │   ├── SKILL.md              overview, architecture, quickstart, helm patterns, commands
 │   ├── traefik-nginx-migration.md   ★ the core doc: provider, annotation map, coexistence, cutover, decommission
-│   ├── traefik-nginx-migration-azure-ip-reuse.md  ★ azure aks: same public ip, no dns change (selector-swap vs ip-move)
+│   ├── traefik-nginx-migration-azure-zero-downtime.md  ★★ azure aks v2: ZERO downtime, same ip, no dns change (shared-Service canary, full example)
+│   ├── traefik-nginx-migration-azure-ip-reuse.md  azure aks v1: instant selector swap (superseded) + ip-move for own-namespace
 │   ├── traefik-resources.md  native CRDs: IngressRoute, Middleware, TraefikService, TLSOption, ServersTransport
 │   ├── traefik-operations.md dashboard, metrics, logs, tracing, troubleshooting, scaling, upgrades
 │   ├── traefik-helm-argocd.md helm values, argocd app-of-apps, sync waves, CRD ownership, multi-cluster

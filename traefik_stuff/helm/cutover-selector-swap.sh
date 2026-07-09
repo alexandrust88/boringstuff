@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
-# STRATEGY A cutover: repoint the EXISTING ingress-nginx-controller Service at traefik pods.
-# same Service object -> same Azure LB -> same public IP -> DNS untouched.
+# STRATEGY "instant selector swap" cutover: repoint the EXISTING ingress-nginx-controller
+# Service at traefik pods. same Service object -> same Azure LB -> same public IP -> DNS untouched.
 # only spec.selector + spec.ports[].targetPort change. port 80/443 stay (LB frontend unchanged).
+#
+# NOTE: for ZERO-downtime gradual migration prefer the shared-Service canary instead
+# (values-azure-shared-service.yaml + traefik-nginx-migration-azure-zero-downtime.md).
+#
+# IMPORTANT: the selector is REPLACED with a json patch op. a merge/strategic patch would
+# MERGE the maps, leaving the old nginx labels in the selector -> matches nothing -> outage.
 #
 # PRE-REQS:
 #   - traefik installed in the ingress-nginx namespace (values-azure-selector-swap.yaml), pods Ready
@@ -22,21 +28,17 @@ echo "current selector:"; kubectl get svc -n "$NS" "$SVC" -o jsonpath='{.spec.se
 echo "== traefik pods that will become the backend =="
 kubectl get pods -n "$NS" -l "app.kubernetes.io/name=$TRAEFIK_NAME,app.kubernetes.io/instance=$TRAEFIK_INSTANCE" -o wide
 
-read -r -p "patch Service selector -> traefik, targetPort 80->8000 443->8443 ? [y/N] " ok
+read -r -p "REPLACE Service selector -> traefik, targetPort 80->8000 443->8443 ? [y/N] " ok
 [ "$ok" = "y" ] || { echo "aborted"; exit 1; }
 
-kubectl patch svc "$SVC" -n "$NS" --type=merge -p "{
-  \"spec\": {
-    \"selector\": {
-      \"app.kubernetes.io/name\": \"$TRAEFIK_NAME\",
-      \"app.kubernetes.io/instance\": \"$TRAEFIK_INSTANCE\"
-    },
-    \"ports\": [
-      { \"name\": \"http\",  \"port\": 80,  \"protocol\": \"TCP\", \"targetPort\": 8000 },
-      { \"name\": \"https\", \"port\": 443, \"protocol\": \"TCP\", \"targetPort\": 8443 }
-    ]
-  }
-}"
+kubectl patch svc "$SVC" -n "$NS" --type=json -p="[
+  {\"op\":\"replace\",\"path\":\"/spec/selector\",\"value\":{
+    \"app.kubernetes.io/name\":\"$TRAEFIK_NAME\",
+    \"app.kubernetes.io/instance\":\"$TRAEFIK_INSTANCE\"}},
+  {\"op\":\"replace\",\"path\":\"/spec/ports\",\"value\":[
+    {\"name\":\"http\",\"port\":80,\"protocol\":\"TCP\",\"targetPort\":8000},
+    {\"name\":\"https\",\"port\":443,\"protocol\":\"TCP\",\"targetPort\":8443}]}
+]"
 
 echo "== after: endpoints should now be traefik pod IPs =="
 kubectl get endpointslice -n "$NS" -l "kubernetes.io/service-name=$SVC" -o wide

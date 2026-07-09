@@ -339,7 +339,8 @@ detail: [traefik-helm-argocd.md](traefik-helm-argocd.md).
 | document | content |
 |----------|---------|
 | [traefik-nginx-migration.md](traefik-nginx-migration.md) | **the core doc** — kubernetesIngressNGINX provider, full annotation mapping, coexistence, status-race fix, dns cutover, rollback, nginx decommission, migration tool |
-| [traefik-nginx-migration-azure-ip-reuse.md](traefik-nginx-migration-azure-ip-reuse.md) | **azure aks: same public ip, no dns change** — strategy A (keep the nginx Service, swap its selector→traefik, same-namespace) vs strategy B (move the static ip, any namespace); the cross-namespace rule; cutover/rollback scripts |
+| [traefik-nginx-migration-azure-zero-downtime.md](traefik-nginx-migration-azure-zero-downtime.md) | **azure aks v2 (preferred): ZERO downtime, same ip, no dns change** — nginx + traefik behind the SAME Service via named targetPorts; gradual canary by scaling nginx down; full worked example; verified against chart 40.1.0 renders + v3.7.1 source |
+| [traefik-nginx-migration-azure-ip-reuse.md](traefik-nginx-migration-azure-ip-reuse.md) | azure aks v1 — instant selector swap (superseded by v2) + **strategy B: move the static ip** (required when traefik must live in its own namespace; ~1-5 min gap) |
 | [traefik-resources.md](traefik-resources.md) | native CRDs: IngressRoute, Middleware (all types), TraefikService (weighted/mirror/failover), TLSOption, ServersTransport; router rules + priority |
 | [traefik-operations.md](traefik-operations.md) | dashboard, prometheus metrics, access logs, tracing, troubleshooting 404/502/503/tls, scaling, upgrades, runbooks |
 | [traefik-helm-argocd.md](traefik-helm-argocd.md) | helm values deep-dive, argocd app-of-apps, sync waves, CRD ownership, multi-cluster |

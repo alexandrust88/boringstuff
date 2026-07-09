@@ -1,0 +1,79 @@
+# ZERO-DOWNTIME shared-Service migration — traefik 3.7.1 (chart 40.1.0+) installed INTO the
+# ingress-nginx namespace, joining the EXISTING ingress-nginx-controller Service as a second
+# backend via NAMED targetPorts (http/https resolved per-pod). the Azure LB, public IP and
+# DNS are never touched. see traefik-skills/traefik-nginx-migration-azure-zero-downtime.md.
+#
+# install:
+#   helm install traefik traefik/traefik -n ingress-nginx --version 40.1.0 -f values-azure-shared-service.yaml
+# then (after gitops freeze) the one selector patch:
+#   kubectl patch svc ingress-nginx-controller -n ingress-nginx --type=json \
+#     -p='[{"op":"replace","path":"/spec/selector","value":{"edge":"shared"}}]'
+#
+# every non-obvious line below was verified by rendering chart 40.1.0 with helm template.
+
+deployment:
+  kind: DaemonSet            # externalTrafficPolicy: Local needs a ready LOCAL endpoint on every node
+  podLabels:
+    edge: shared             # the shared label that joins the nginx Service's patched selector
+
+# CRITICAL: no Service from this chart — the kept ingress-nginx-controller Service fronts traefik.
+# a second LoadBalancer Service here would provision a second Azure LB/IP.
+service:
+  enabled: false
+
+# rename entrypoints so the CONTAINER PORT NAMES are exactly "http" and "https".
+# chart rule (verified in _podtemplate.tpl): ports map key = entrypoint name = container port name.
+# the nginx Service's named targetPorts ("http"/"https") then resolve per-pod:
+#   nginx pods -> 80/443, traefik pods -> 8000/8443, behind the SAME Service.
+ports:
+  web: null                  # remove chart defaults (schema accepts null)
+  websecure: null
+  http:
+    port: 8000
+  https:
+    port: 8443
+    http:
+      tls:
+        enabled: true        # entrypoint-level tls — NOTE: nested under http.tls (schema rejects top-level)
+
+providers:
+  kubernetesIngressNGINX:
+    enabled: true
+    ingressClass: nginx
+    controllerClass: k8s.io/ingress-nginx
+    # MANDATORY with renamed ports: the provider pins routers to entrypoints web/websecure by
+    # default; without these overrides every router targets a nonexistent entrypoint and is
+    # silently dropped. (non-default values require appVersion >= v3.7.0 — chart enforces.)
+    httpEntryPoint: "http"
+    httpsEntryPoint: "https"
+    publishService:
+      enabled: false         # nginx owns Ingress .status during coexistence; flip true at phase 5
+      pathOverride: ingress-nginx/ingress-nginx-controller
+    # strictValidatePathType: false   # only if 3.7 rejects a nginx-lenient pathType (router shows disabled)
+  kubernetesCRD:
+    enabled: true            # native Middleware available (snippet/lua re-expression)
+  kubernetesIngress:
+    enabled: false           # the nginx provider owns the nginx class; avoid duplicate routers
+  kubernetesGateway:
+    enabled: false
+
+ingressClass:
+  enabled: false             # pure nginx-class operation; no traefik IngressClass needed
+
+logs:
+  general:
+    level: INFO
+  access:
+    enabled: true
+    format: json
+
+metrics:
+  prometheus:
+    service:
+      enabled: true
+    serviceMonitor:
+      enabled: true
+
+resources:
+  requests: { cpu: 200m, memory: 256Mi }
+  limits:   { cpu: 1000m, memory: 1Gi }
