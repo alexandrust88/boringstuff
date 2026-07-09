@@ -1,0 +1,694 @@
+= Cilium Dashboard v2 -- SOP & Metrics Reference
+:toc: left
+:toclevels: 3
+:sectnums:
+:icons: font
+:source-highlighter: highlight.js
+
+== Overview
+
+Dashboard:: *Cilium Deep Insights v2 (AKS / Fleet)*
+Cluster filter default:: `cass-*`
+Hubble metrics:: Not available (AKS-managed Cilium)
+
+== Datadog Agent Configuration -- What to Enable
+
+=== Cilium OpenMetrics Check (cilium-agent metrics)
+
+Deploy via Datadog Agent DaemonSet annotations or Helm values:
+
+[source,yaml]
+----
+# datadog-agent helm values
+datadog:
+  confd:
+    cilium.yaml: |-
+      ad_identifiers:
+        - cilium-agent
+      init_config:
+      instances:
+        - openmetrics_endpoint: "http://%%host%%:9962/metrics"
+          namespace: cilium
+          metrics:
+            - ".*"
+          raw_metric_prefix: ""
+          send_distribution_buckets: false
+          send_monotonic_counter: true
+----
+
+=== Cilium Operator Check
+
+[source,yaml]
+----
+    cilium_operator.yaml: |-
+      ad_identifiers:
+        - cilium-operator
+      init_config:
+      instances:
+        - openmetrics_endpoint: "http://%%host%%:9963/metrics"
+          namespace: cilium.operator
+          metrics:
+            - ".*"
+----
+
+=== Kubernetes State Metrics Core (KSM)
+
+[source,yaml]
+----
+datadog:
+  kubeStateMetricsCore:
+    enabled: true
+----
+
+=== System Checks (enabled by default)
+
+Auto-enabled on the Datadog Agent DaemonSet:
+
+* `system.cpu.*`, `system.mem.*`, `system.disk.*`, `system.net.*`, `system.load.*`, `system.uptime`
+* `tcp_queue.*`, `oom_kill.*`
+
+=== Kubelet Check (enabled by default)
+
+Auto-collects: `kubernetes.cpu.*`, `kubernetes.memory.*`, `kubernetes.pods.*`, `kubernetes.containers.restarts`
+
+== Metrics Reference by Dashboard Section
+
+=== Security Posture
+
+[cols="2,3,2", options="header"]
+|===
+| Metric | What It Tells You | Alert When
+
+| `cilium.endpoint.count`
+| Total managed endpoints
+| Sudden drop = pods not getting networked
+
+| `cilium.policy.endpoint_enforcement_status`
+| Endpoints by enforcement mode
+| `policy_enforcement_status:none` > 10% of total
+
+| `cilium.drop_count.count`
+| Packets dropped by datapath
+| Drop-to-forward ratio > 1%
+
+| `cilium.forward_count.count`
+| Packets forwarded
+| Flatline = network issue
+|===
+
+Tags:: `kube_cluster_name`, `host`, `reason`, `direction`, `policy_enforcement_status`
+
+=== Agent / Operator Health
+
+[cols="2,3,2", options="header"]
+|===
+| Metric | What It Tells You | Alert When
+
+| `cilium.openmetrics.health`
+| Agent scrape health (service check)
+| Status != OK
+
+| `cilium.controllers.failing.count`
+| Failing internal controllers
+| > 0
+
+| `cilium.unreachable.nodes`
+| Nodes this agent can't reach
+| > 0
+
+| `cilium.policy.count`
+| Loaded network policies
+| Unexpected drop
+
+| `cilium.controllers.runs.count`
+| Controller executions by `status`
+| `status:failure` sustained
+
+| `kubernetes.containers.restarts`
+| Agent/operator pod restarts
+| > 2 in 15m (filter `kube_container_name:cilium-agent`)
+|===
+
+=== Drops & Network Traffic (SRE Critical)
+
+[cols="2,3,2", options="header"]
+|===
+| Metric | What It Tells You | Alert When
+
+| `cilium.drop_count.count`
+| Drop rate by `reason` and `direction`
+| Anomaly band breach, new `reason` appearing
+
+| `cilium.forward_bytes.count`
+| Bytes forwarded (ingress/egress)
+| Asymmetry or flatline
+
+| `cilium.forward_count.count`
+| Packets forwarded (ingress/egress)
+| Sudden change
+|===
+
+IMPORTANT: Key drop reasons to watch: `POLICY_DENIED`, `CT_TRUNCATED_OR_INVALID_HEADER`, `UNSUPPORTED_L3_PROTOCOL`
+
+=== eBPF & Datapath Health (Critical)
+
+[cols="2,3,2", options="header"]
+|===
+| Metric | What It Tells You | Alert When
+
+| `cilium.bpf.map_pressure`
+| BPF map fill ratio (0.0--1.0)
+| > 0.75 warn, > 0.9 critical
+
+| `cilium.bpf.maps.virtual_memory.max.bytes`
+| Memory used by BPF maps
+| Sustained growth
+
+| `cilium.bpf.progs.virtual_memory.max.bytes`
+| Memory used by BPF programs
+| Sustained growth
+
+| `cilium.bpf.map_ops.count`
+| Map operations, filter `outcome:fail`
+| Any failures
+
+| `cilium.datapath.conntrack_gc.entries`
+| Conntrack table size per node
+| Approaching kernel limit
+
+| `cilium.datapath.conntrack_gc.duration.seconds.*`
+| GC cycle time (sum/count for avg)
+| Avg > 1s
+|===
+
+WARNING: Critical map names: `cilium_ct4_global`, `cilium_ct_any4_global`, `cilium_ipcache`, `cilium_policy_*`
+
+=== Policy Enforcement
+
+[cols="2,3,2", options="header"]
+|===
+| Metric | What It Tells You | Alert When
+
+| `cilium.policy.change.count`
+| Policy changes by `outcome`
+| `outcome:fail` > 0
+
+| `cilium.policy.import_errors.count`
+| Policy import failures
+| Any count
+
+| `cilium.policy.implementation_delay.*`
+| Time from policy change to enforcement
+| Avg > 5s
+
+| `cilium.endpoint.regenerations.count`
+| Endpoint rebuilds by `outcome`
+| `outcome:fail` rate > 5%
+
+| `cilium.endpoint.state`
+| Endpoints by `endpoint_state`
+| `not-ready` sustained
+|===
+
+=== Capacity Planning
+
+[cols="2,3,2", options="header"]
+|===
+| Metric | What It Tells You | Alert When
+
+| `cilium.identity.count`
+| Security identities in use (limit: 65535)
+| > 50000 warn, > 60000 critical
+
+| `cilium.endpoint.count`
+| Endpoint growth trend
+| Forecast hits node limit
+
+| `cilium.ip_addresses.count`
+| IPs by `family` (v4/v6)
+| Near subnet exhaustion
+
+| `cilium.endpoint.regeneration_time_stats.seconds.*`
+| Regen time trend
+| Avg increasing over days
+|===
+
+=== Operator / Control-plane
+
+[cols="2,3,2", options="header"]
+|===
+| Metric | What It Tells You | Alert When
+
+| `cilium.operator.ipam.ips`
+| IPAM IPs by `type`
+| N/A (limited on AKS)
+
+| `cilium.operator.ipam.nodes`
+| IPAM nodes by `category`
+| `at-capacity` nodes appearing
+|===
+
+=== Agent + Operator Resources
+
+[cols="2,3,2", options="header"]
+|===
+| Metric | What It Tells You | Alert When
+
+| `cilium.process.cpu.seconds.count`
+| Agent CPU per host
+| Outlier detection triggers
+
+| `cilium.process.resident_memory.bytes`
+| Agent RSS per host
+| Outlier or > 1GB
+
+| `cilium.operator.process.cpu.seconds.count`
+| Operator CPU
+| Sustained spike
+
+| `cilium.operator.process.resident_memory.bytes`
+| Operator RSS
+| > 512MB
+
+| `cilium.process.open_fds` / `cilium.process.max_fds`
+| FD usage vs limit
+| > 80% of max
+|===
+
+=== FQDN / DNS-Aware Policy
+
+[cols="2,3,2", options="header"]
+|===
+| Metric | What It Tells You | Alert When
+
+| `cilium.fqdn.active_ips`
+| IPs resolved via FQDN policies
+| Rapid growth = DNS churn
+
+| `cilium.fqdn.active_names`
+| FQDN names tracked
+| Unexpected increase
+
+| `cilium.fqdn.selectors`
+| FQDN selectors in use
+| --
+
+| `cilium.fqdn.alive_zombie_connections`
+| Connections kept past DNS TTL
+| > 100
+
+| `cilium.fqdn.gc_deletions.count`
+| GC cleanup rate
+| --
+|===
+
+=== API Rate Limiter
+
+[cols="2,3,2", options="header"]
+|===
+| Metric | What It Tells You | Alert When
+
+| `cilium.api_limiter.requests_in_flight`
+| In-flight requests by `api_call`
+| Near limit
+
+| `cilium.api_limiter.wait_duration.seconds`
+| Rate limiter wait time
+| > 1s sustained
+
+| `cilium.api_limiter.processing_duration.seconds`
+| Processing time after limiter
+| Increasing trend
+
+| `cilium.api_limiter.rate_limit`
+| Current rate limit value
+| Auto-decreasing
+
+| `cilium.api_limiter.adjustment_factor`
+| Auto-tuning factor
+| < 0.5
+
+| `cilium.api_limiter.processed_requests.count`
+| Total processed by `api_call`
+| --
+|===
+
+=== Kubernetes Events & Workqueue
+
+[cols="2,3,2", options="header"]
+|===
+| Metric | What It Tells You | Alert When
+
+| `cilium.kubernetes.events_received.count`
+| K8s events by `scope`/`action`
+| --
+
+| `cilium.k8s_event.lag.seconds`
+| Event processing lag
+| > 5s
+
+| `cilium.k8s.workqueue.depth`
+| Queue depth by `name`
+| > 100 sustained
+
+| `cilium.k8s.workqueue.adds.total`
+| Items added to queues
+| --
+
+| `cilium.k8s.workqueue.retries.total`
+| Retry count
+| High retry rate
+
+| `cilium.k8s.workqueue.longest.running.processor.seconds`
+| Slowest processor
+| > 30s
+
+| `cilium.k8s.workqueue.queue.duration.seconds.*`
+| Time items sit in queue
+| Avg > 5s
+
+| `cilium.k8s_terminating.endpoints_events.count`
+| Terminating endpoint events
+| --
+|===
+
+=== Services & L7 Proxy
+
+[cols="2,3,2", options="header"]
+|===
+| Metric | What It Tells You | Alert When
+
+| `cilium.services.events.count`
+| Service changes by `action`
+| --
+
+| `cilium.proxy.redirects`
+| Active proxy redirects
+| --
+
+| `cilium.policy.l7.count`
+| Total L7 verdicts
+| --
+
+| `cilium.policy.l7_denied.count`
+| L7 denials
+| Unexpected denials
+
+| `cilium.policy.l7_forwarded.count`
+| L7 forwards
+| --
+
+| `cilium.policy.l7_parse_errors.count`
+| L7 parse errors
+| > 0
+
+| `cilium.proxy.upstream_reply.seconds.*`
+| Upstream reply latency
+| Avg > 500ms
+
+| `cilium.proxy.datapath.update_timeout.count`
+| Proxy update timeouts
+| > 0
+|===
+
+=== Operator IPAM & Azure API (AKS)
+
+[cols="2,3,2", options="header"]
+|===
+| Metric | What It Tells You | Alert When
+
+| `cilium.operator.ipam.available_ips`
+| Free IPs
+| Low and decreasing
+
+| `cilium.operator.ipam.used_ips`
+| IPs in use
+| Near available
+
+| `cilium.operator.ipam.needed_ips`
+| IPs needed
+| > 0 sustained
+
+| `cilium.operator.ipam.available_interfaces`
+| Free NICs
+| 0
+
+| `cilium.operator.ipam.allocation_ops.count`
+| Allocation ops
+| --
+
+| `cilium.operator.ipam.release_ops.count`
+| Release ops
+| --
+
+| `cilium.operator.ipam.allocation.duration.seconds.*`
+| Allocation time
+| Avg > 5s
+
+| `cilium.operator.identity_gc.entries`
+| GC'd identity entries
+| --
+
+| `cilium.operator.identity_gc.runs`
+| GC run count
+| --
+
+| `cilium.operator.azure.api.duration.seconds.*`
+| Azure API latency
+| Avg > 2s
+
+| `cilium.operator.azure.api.rate_limit.duration.seconds.*`
+| Azure rate limit wait
+| Any wait
+
+| `cilium.operator.ces.queueing_delay.seconds.*`
+| CES queue delay
+| Increasing
+
+| `cilium.operator.ces.sync.total`
+| CES syncs
+| --
+
+| `cilium.operator.ces.sync_errors.count`
+| CES sync errors
+| > 0
+|===
+
+=== Agent Internals
+
+[cols="2,3,2", options="header"]
+|===
+| Metric | What It Tells You | Alert When
+
+| `cilium.agent.api_process_time.seconds.*`
+| Agent API processing time
+| Avg > 1s
+
+| `cilium.controllers.runs_duration.seconds.*`
+| Controller run time
+| Avg > 5s
+
+| `cilium.subprocess.start.count`
+| Subprocess forks
+| Unexpected spikes
+
+| `cilium.triggers_policy.update_call_duration.seconds.*`
+| Policy trigger duration
+| Increasing
+
+| `cilium.triggers_policy.update_folds`
+| Batched trigger folds
+| --
+
+| `cilium.policy.regeneration_time_stats.seconds.*`
+| Policy regen time
+| Avg > 10s
+
+| `cilium.policy.max_revision`
+| Highest policy revision
+| --
+
+| `cilium.errors_warning.count`
+| Agent errors/warnings
+| Spike
+
+| `cilium.operator.errors.warnings.total`
+| Operator errors/warnings
+| Spike
+
+| `cilium.version`
+| Cilium version by `version` tag
+| Version mismatch across nodes
+|===
+
+=== IPCache & Node Management
+
+[cols="2,3,2", options="header"]
+|===
+| Metric | What It Tells You | Alert When
+
+| `cilium.ipcache.errors.count`
+| IPCache errors by `type`/`error`
+| > 0
+
+| `cilium.ipam.events.count`
+| IPAM events by `type`
+| --
+
+| `cilium.ipam.capacity`
+| IPAM capacity (may be empty on AKS)
+| --
+
+| `cilium.nodes.all_datapath_validations.count`
+| Datapath validation runs
+| --
+
+| `cilium.nodes.all_events_received.count`
+| Node events by `event_type`/`source`
+| --
+
+| `cilium.nodes.managed.total`
+| Managed node count
+| Mismatch with expected
+
+| `cilium.unreachable.health_endpoints`
+| Unreachable health endpoints
+| > 0
+|===
+
+=== K8s Client API Performance
+
+[cols="2,3,2", options="header"]
+|===
+| Metric | What It Tells You | Alert When
+
+| `cilium.k8s_client.api_calls.count`
+| API calls by `method`
+| 5xx errors (`response_code:5*`)
+
+| `cilium.k8s_client.api_latency_time.seconds.*`
+| API latency
+| Avg > 1s
+
+| `cilium.k8s_client.rate_limiter_duration.seconds.*`
+| Client-side rate limit wait
+| > 0 sustained
+|===
+
+=== Node Health (AKS) -- Non-Cilium
+
+[cols="2,2,2", options="header"]
+|===
+| Metric | Source | Alert When
+
+| `kubernetes_state.node.count`
+| KSM Core
+| Drop
+
+| `kubernetes_state.node.by_condition`
+| KSM Core
+| `condition:ready,status:false`
+
+| `kubernetes_state.node.status`
+| KSM Core
+| `status:unschedulable`
+
+| `kubernetes_state.node.{cpu,memory,pods}_allocatable`
+| KSM Core
+| Low headroom
+
+| `kubernetes.{cpu,memory}.usage` / `.requests`
+| Kubelet
+| Usage > 80% of allocatable
+
+| `kubernetes.pods.running`
+| Kubelet
+| Near allocatable limit
+
+| `system.cpu.{user,system,iowait,stolen}`
+| DD Agent
+| Total > 80%
+
+| `system.mem.pct_usable`
+| DD Agent
+| < 15%
+
+| `system.disk.in_use`
+| DD Agent
+| > 85%
+
+| `system.io.util`
+| DD Agent
+| > 90% sustained
+
+| `system.net.bytes_{rcvd,sent}`
+| DD Agent
+| Saturation
+
+| `system.net.packets_{in,out}.{error,drop}`
+| DD Agent
+| > 0 sustained
+
+| `system.net.conntrack.{count,max}`
+| DD Agent
+| count > 80% of max
+
+| `system.load.norm.{1,5,15}`
+| DD Agent
+| > 1.0 sustained
+
+| `oom_kill.oom_process.count`
+| DD Agent
+| > 0
+
+| `tcp_queue.read_buffer_max_usage_pct`
+| DD Agent
+| > 80%
+|===
+
+== Importing the Dashboard
+
+[source,bash]
+----
+# Export DD keys
+export DD_API_KEY="<your-api-key>"
+export DD_APP_KEY="<your-app-key>"
+export DD_SITE="datadoghq.eu"  # or datadoghq.com
+
+# Import
+curl -X POST "https://${DD_SITE}/api/v1/dashboard" \
+  -H "Content-Type: application/json" \
+  -H "DD-API-KEY: ${DD_API_KEY}" \
+  -H "DD-APPLICATION-KEY: ${DD_APP_KEY}" \
+  -d @cilium_stuff/datadog-custom-dashboard.json
+----
+
+Or import via Datadog UI: *Dashboards > New Dashboard > Import Dashboard JSON*.
+
+== Troubleshooting
+
+=== No data on Cilium widgets
+
+[source,bash]
+----
+# Verify agent is scraping cilium
+kubectl exec -n datadog <agent-pod> -- agent status | grep cilium
+
+# Verify cilium metrics endpoint
+kubectl exec -n kube-system ds/cilium -- curl -s localhost:9962/metrics | head -20
+----
+
+=== Metrics appear with wrong names
+
+Check OpenMetrics V2 is being used (default in Agent 7.x). V1 uses different naming.
+
+=== Missing operator metrics
+
+[source,bash]
+----
+kubectl exec -n kube-system deploy/cilium-operator -- curl -s localhost:9963/metrics | head -20
+----
+
+=== Node Health section empty
+
+Ensure KSM Core check is enabled and `system.*` checks are running on all nodes.

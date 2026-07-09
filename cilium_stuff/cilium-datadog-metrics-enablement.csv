@@ -1,0 +1,144 @@
+Category,Datadog Metric Name,Prometheus Source,Type,Description,Enabled in Dashboard,Enable in DD Agent,Tags,Alert Threshold
+Agent Core,cilium.endpoint.count,cilium_endpoint_state,gauge,Total managed endpoints,YES,YES,"kube_cluster_name, host",Sudden drop
+Agent Core,cilium.endpoint.state,cilium_endpoint_state,gauge,Endpoints by state,YES,YES,"kube_cluster_name, endpoint_state",not-ready sustained
+Agent Core,cilium.policy.count,cilium_policy,gauge,Active network policies,YES,YES,kube_cluster_name,Unexpected drop
+Agent Core,cilium.policy.max_revision,cilium_policy_max_revision,gauge,Highest policy revision,YES,YES,kube_cluster_name,—
+Agent Core,cilium.identity.count,cilium_identity_count,gauge,Security identities in use (limit 65535),YES,YES,kube_cluster_name,>50000 warn / >60000 crit
+Agent Core,cilium.ip_addresses.count,cilium_ip_addresses,gauge,IP addresses by family,YES,YES,"kube_cluster_name, family",Near subnet exhaustion
+Agent Core,cilium.unreachable.nodes,cilium_unreachable_nodes,gauge,Unreachable nodes from this agent,YES,YES,"kube_cluster_name, host",>0
+Agent Core,cilium.unreachable.health_endpoints,cilium_unreachable_health_endpoints,gauge,Unreachable health endpoints,YES,YES,kube_cluster_name,>0
+Agent Core,cilium.nodes.managed.total,cilium_nodes_managed_total,gauge,Managed node count,YES,YES,kube_cluster_name,Mismatch with expected
+Agent Core,cilium.version,cilium_version,gauge,Cilium version info metric,YES,YES,"kube_cluster_name, version",Version mismatch across nodes
+Drops & Forwarding,cilium.drop_count.count,cilium_drop_count_total,counter,Packets dropped by datapath,YES,YES,"kube_cluster_name, host, reason, direction",Drop-to-forward ratio >1%
+Drops & Forwarding,cilium.forward_count.count,cilium_forward_count_total,counter,Packets forwarded,YES,YES,"kube_cluster_name, host, direction",Flatline
+Drops & Forwarding,cilium.forward_bytes.count,cilium_forward_bytes_total,counter,Bytes forwarded,YES,YES,"kube_cluster_name, host, direction",Asymmetry
+Policy,cilium.policy.endpoint_enforcement_status,cilium_policy_endpoint_enforcement_status,gauge,Endpoints by enforcement mode,YES,YES,"kube_cluster_name, host, policy_enforcement_status",none >10%
+Policy,cilium.policy.change.count,cilium_policy_change_total,counter,Policy changes by outcome,YES,YES,"kube_cluster_name, outcome",outcome:fail >0
+Policy,cilium.policy.import_errors.count,cilium_policy_import_errors_total,counter,Policy import errors,YES,YES,kube_cluster_name,Any count
+Policy,cilium.policy.implementation_delay.sum,cilium_policy_implementation_delay_sum,counter,Policy delay (sum for avg),YES,YES,kube_cluster_name,Avg >5s
+Policy,cilium.policy.implementation_delay.count,cilium_policy_implementation_delay_count,counter,Policy delay (count for avg),YES,YES,kube_cluster_name,—
+Policy,cilium.policy.regeneration_time_stats.seconds.sum,cilium_policy_regeneration_time_stats_seconds_sum,counter,Policy regen time (sum),YES,YES,kube_cluster_name,Avg >10s
+Policy,cilium.policy.regeneration_time_stats.seconds.count,cilium_policy_regeneration_time_stats_seconds_count,counter,Policy regen time (count),YES,YES,kube_cluster_name,—
+Policy,cilium.policy.l7.count,cilium_policy_l7_total,counter,L7 policy verdicts total,YES,YES,kube_cluster_name,—
+Policy,cilium.policy.l7_denied.count,cilium_policy_l7_denied_total,counter,L7 denials,YES,YES,kube_cluster_name,Unexpected denials
+Policy,cilium.policy.l7_forwarded.count,cilium_policy_l7_forwarded_total,counter,L7 forwards,YES,YES,kube_cluster_name,—
+Policy,cilium.policy.l7_parse_errors.count,cilium_policy_l7_parse_errors_total,counter,L7 parse errors,YES,YES,kube_cluster_name,>0
+Policy,cilium.policy.l7_received.count,cilium_policy_l7_received_total,counter,L7 received,YES,YES,kube_cluster_name,—
+Endpoints,cilium.endpoint.regenerations.count,cilium_endpoint_regenerations_total,counter,Endpoint regenerations by outcome,YES,YES,"kube_cluster_name, host, outcome",fail rate >5%
+Endpoints,cilium.endpoint.regeneration_time_stats.seconds.sum,cilium_endpoint_regeneration_time_stats_seconds_sum,counter,Regen time (sum),YES,YES,kube_cluster_name,Avg increasing
+Endpoints,cilium.endpoint.regeneration_time_stats.seconds.count,cilium_endpoint_regeneration_time_stats_seconds_count,counter,Regen time (count),YES,YES,kube_cluster_name,—
+eBPF / BPF,cilium.bpf.map_pressure,cilium_bpf_map_pressure,gauge,BPF map fill ratio 0-1,YES,YES,"kube_cluster_name, host, map_name",>0.75 warn / >0.9 crit
+eBPF / BPF,cilium.bpf.maps.virtual_memory.max.bytes,cilium_bpf_maps_virtual_memory_max_bytes,gauge,BPF map memory,YES,YES,"kube_cluster_name, host",Sustained growth
+eBPF / BPF,cilium.bpf.progs.virtual_memory.max.bytes,cilium_bpf_progs_virtual_memory_max_bytes,gauge,BPF program memory,YES,YES,"kube_cluster_name, host",Sustained growth
+eBPF / BPF,cilium.bpf.map_ops.count,cilium_bpf_map_ops_total,counter,BPF map ops (filter outcome:fail),YES,YES,"kube_cluster_name, outcome, map_name, operation",Any failures
+Conntrack,cilium.datapath.conntrack_gc.entries,cilium_datapath_conntrack_gc_entries,gauge,Conntrack table entries,YES,YES,"kube_cluster_name, host",Near kernel limit
+Conntrack,cilium.datapath.conntrack_gc.duration.seconds.sum,cilium_datapath_conntrack_gc_duration_seconds_sum,counter,GC duration (sum),YES,YES,"kube_cluster_name, host",Avg >1s
+Conntrack,cilium.datapath.conntrack_gc.duration.seconds.count,cilium_datapath_conntrack_gc_duration_seconds_count,counter,GC duration (count),YES,YES,"kube_cluster_name, host",—
+Controllers,cilium.controllers.failing.count,cilium_controllers_failing,gauge,Failing controllers,YES,YES,"kube_cluster_name, host",>0
+Controllers,cilium.controllers.runs.count,cilium_controllers_runs_total,counter,Controller runs by status,YES,YES,"kube_cluster_name, host, status",status:failure sustained
+Controllers,cilium.controllers.runs_duration.seconds.sum,cilium_controllers_runs_duration_seconds_sum,counter,Controller run duration (sum),YES,YES,kube_cluster_name,Avg >5s
+Controllers,cilium.controllers.runs_duration.seconds.count,cilium_controllers_runs_duration_seconds_count,counter,Controller run duration (count),YES,YES,kube_cluster_name,—
+FQDN,cilium.fqdn.active_ips,cilium_fqdn_active_ips,gauge,Active FQDN-resolved IPs,YES,YES,kube_cluster_name,Rapid growth
+FQDN,cilium.fqdn.active_names,cilium_fqdn_active_names,gauge,Active FQDN names,YES,YES,kube_cluster_name,Unexpected increase
+FQDN,cilium.fqdn.selectors,cilium_fqdn_selectors,gauge,FQDN selectors,YES,YES,kube_cluster_name,—
+FQDN,cilium.fqdn.alive_zombie_connections,cilium_fqdn_alive_zombie_connections,gauge,Zombie connections past TTL,YES,YES,kube_cluster_name,>100
+FQDN,cilium.fqdn.gc_deletions.count,cilium_fqdn_gc_deletions_total,counter,FQDN GC deletions,YES,YES,kube_cluster_name,—
+API Limiter,cilium.api_limiter.requests_in_flight,cilium_api_limiter_requests_in_flight,gauge,In-flight requests,YES,YES,"kube_cluster_name, api_call",Near limit
+API Limiter,cilium.api_limiter.wait_duration.seconds,cilium_api_limiter_wait_duration_seconds,gauge,Rate limiter wait,YES,YES,"kube_cluster_name, api_call",>1s sustained
+API Limiter,cilium.api_limiter.processing_duration.seconds,cilium_api_limiter_processing_duration_seconds,gauge,Processing duration,YES,YES,"kube_cluster_name, api_call",Increasing
+API Limiter,cilium.api_limiter.rate_limit,cilium_api_limiter_rate_limit,gauge,Current rate limit,YES,YES,"kube_cluster_name, api_call",Auto-decreasing
+API Limiter,cilium.api_limiter.adjustment_factor,cilium_api_limiter_adjustment_factor,gauge,Auto-tuning factor,YES,YES,"kube_cluster_name, api_call",<0.5
+API Limiter,cilium.api_limiter.processed_requests.count,cilium_api_limiter_processed_requests_total,counter,Processed requests,YES,YES,"kube_cluster_name, api_call",—
+K8s Client,cilium.k8s_client.api_calls.count,cilium_k8s_client_api_calls_total,counter,K8s API calls by method,YES,YES,"kube_cluster_name, method, response_code",5xx errors
+K8s Client,cilium.k8s_client.api_latency_time.seconds.sum,cilium_k8s_client_api_latency_time_seconds_sum,counter,API latency (sum),YES,YES,kube_cluster_name,Avg >1s
+K8s Client,cilium.k8s_client.api_latency_time.seconds.count,cilium_k8s_client_api_latency_time_seconds_count,counter,API latency (count),YES,YES,kube_cluster_name,—
+K8s Client,cilium.k8s_client.rate_limiter_duration.seconds.sum,cilium_k8s_client_rate_limiter_duration_seconds_sum,counter,Rate limiter wait (sum),YES,YES,kube_cluster_name,>0 sustained
+K8s Client,cilium.k8s_client.rate_limiter_duration.seconds.count,cilium_k8s_client_rate_limiter_duration_seconds_count,counter,Rate limiter wait (count),YES,YES,kube_cluster_name,—
+K8s Events,cilium.kubernetes.events_received.count,cilium_kubernetes_events_received_total,counter,K8s events received,YES,YES,"kube_cluster_name, scope, action",—
+K8s Events,cilium.k8s_event.lag.seconds,cilium_k8s_event_lag_seconds,gauge,Event processing lag,YES,YES,kube_cluster_name,>5s
+K8s Workqueue,cilium.k8s.workqueue.depth,cilium_k8s_workqueue_depth,gauge,Workqueue depth,YES,YES,"kube_cluster_name, name",>100 sustained
+K8s Workqueue,cilium.k8s.workqueue.adds.total,cilium_k8s_workqueue_adds_total,counter,Workqueue adds,YES,YES,"kube_cluster_name, name",—
+K8s Workqueue,cilium.k8s.workqueue.retries.total,cilium_k8s_workqueue_retries_total,counter,Workqueue retries,YES,YES,"kube_cluster_name, name",High retry rate
+K8s Workqueue,cilium.k8s.workqueue.longest.running.processor.seconds,cilium_k8s_workqueue_longest_running_processor_seconds,gauge,Longest processor,YES,YES,"kube_cluster_name, name",>30s
+K8s Workqueue,cilium.k8s.workqueue.queue.duration.seconds.sum,cilium_k8s_workqueue_queue_duration_seconds_sum,counter,Queue duration (sum),YES,YES,"kube_cluster_name, name",Avg >5s
+K8s Workqueue,cilium.k8s.workqueue.queue.duration.seconds.count,cilium_k8s_workqueue_queue_duration_seconds_count,counter,Queue duration (count),YES,YES,"kube_cluster_name, name",—
+K8s Workqueue,cilium.k8s_terminating.endpoints_events.count,cilium_k8s_terminating_endpoints_events_total,counter,Terminating endpoint events,YES,YES,kube_cluster_name,—
+Services & Proxy,cilium.services.events.count,cilium_services_events_total,counter,Service events by action,YES,YES,"kube_cluster_name, action",—
+Services & Proxy,cilium.proxy.redirects,cilium_proxy_redirects,gauge,Active proxy redirects,YES,YES,kube_cluster_name,—
+Services & Proxy,cilium.proxy.upstream_reply.seconds.sum,cilium_proxy_upstream_reply_seconds_sum,counter,Upstream reply latency (sum),YES,YES,kube_cluster_name,Avg >500ms
+Services & Proxy,cilium.proxy.upstream_reply.seconds.count,cilium_proxy_upstream_reply_seconds_count,counter,Upstream reply latency (count),YES,YES,kube_cluster_name,—
+Services & Proxy,cilium.proxy.datapath.update_timeout.count,cilium_proxy_datapath_update_timeout_total,counter,Proxy update timeouts,YES,YES,kube_cluster_name,>0
+Operator IPAM,cilium.operator.ipam.ips,cilium_operator_ipam_ips,gauge,IPAM IPs by type,YES,YES,"kube_cluster_name, type",—
+Operator IPAM,cilium.operator.ipam.nodes,cilium_operator_ipam_nodes,gauge,IPAM nodes by category,YES,YES,"kube_cluster_name, category",at-capacity
+Operator IPAM,cilium.operator.ipam.available_ips,cilium_operator_ipam_available_ips,gauge,Available IPs,YES,YES,kube_cluster_name,Low and decreasing
+Operator IPAM,cilium.operator.ipam.used_ips,cilium_operator_ipam_used_ips,gauge,Used IPs,YES,YES,kube_cluster_name,Near available
+Operator IPAM,cilium.operator.ipam.needed_ips,cilium_operator_ipam_needed_ips,gauge,Needed IPs,YES,YES,kube_cluster_name,>0 sustained
+Operator IPAM,cilium.operator.ipam.available_interfaces,cilium_operator_ipam_available_interfaces,gauge,Available NICs,YES,YES,kube_cluster_name,0
+Operator IPAM,cilium.operator.ipam.allocation_ops.count,cilium_operator_ipam_allocation_ops_total,counter,Allocation ops,YES,YES,kube_cluster_name,—
+Operator IPAM,cilium.operator.ipam.release_ops.count,cilium_operator_ipam_release_ops_total,counter,Release ops,YES,YES,kube_cluster_name,—
+Operator IPAM,cilium.operator.ipam.allocation.duration.seconds.sum,cilium_operator_ipam_allocation_duration_seconds_sum,counter,Allocation duration (sum),YES,YES,kube_cluster_name,Avg >5s
+Operator IPAM,cilium.operator.ipam.allocation.duration.seconds.count,cilium_operator_ipam_allocation_duration_seconds_count,counter,Allocation duration (count),YES,YES,kube_cluster_name,—
+Operator GC,cilium.operator.identity_gc.entries,cilium_operator_identity_gc_entries,gauge,Identity GC entries,YES,YES,kube_cluster_name,—
+Operator GC,cilium.operator.identity_gc.runs,cilium_operator_identity_gc_runs,gauge,Identity GC runs,YES,YES,kube_cluster_name,—
+Operator Azure,cilium.operator.azure.api.duration.seconds.sum,cilium_operator_azure_api_duration_seconds_sum,counter,Azure API latency (sum),YES,YES,kube_cluster_name,Avg >2s
+Operator Azure,cilium.operator.azure.api.duration.seconds.count,cilium_operator_azure_api_duration_seconds_count,counter,Azure API latency (count),YES,YES,kube_cluster_name,—
+Operator Azure,cilium.operator.azure.api.rate_limit.duration.seconds.sum,cilium_operator_azure_api_rate_limit_duration_seconds_sum,counter,Azure rate limit wait (sum),YES,YES,kube_cluster_name,Any wait
+Operator Azure,cilium.operator.azure.api.rate_limit.duration.seconds.count,cilium_operator_azure_api_rate_limit_duration_seconds_count,counter,Azure rate limit wait (count),YES,YES,kube_cluster_name,—
+Operator CES,cilium.operator.ces.queueing_delay.seconds.sum,cilium_operator_ces_queueing_delay_seconds_sum,counter,CES queue delay (sum),YES,YES,kube_cluster_name,Increasing
+Operator CES,cilium.operator.ces.queueing_delay.seconds.count,cilium_operator_ces_queueing_delay_seconds_count,counter,CES queue delay (count),YES,YES,kube_cluster_name,—
+Operator CES,cilium.operator.ces.sync.total,cilium_operator_ces_sync_total,counter,CES syncs,YES,YES,kube_cluster_name,—
+Operator CES,cilium.operator.ces.sync_errors.count,cilium_operator_ces_sync_errors_total,counter,CES sync errors,YES,YES,kube_cluster_name,>0
+Agent Resources,cilium.process.cpu.seconds.count,cilium_process_cpu_seconds_total,counter,Agent CPU,YES,YES,"kube_cluster_name, host",Outlier
+Agent Resources,cilium.process.resident_memory.bytes,cilium_process_resident_memory_bytes,gauge,Agent memory,YES,YES,"kube_cluster_name, host",>1GB or outlier
+Agent Resources,cilium.operator.process.cpu.seconds.count,cilium_operator_process_cpu_seconds_total,counter,Operator CPU,YES,YES,kube_cluster_name,Sustained spike
+Agent Resources,cilium.operator.process.resident_memory.bytes,cilium_operator_process_resident_memory_bytes,gauge,Operator memory,YES,YES,kube_cluster_name,>512MB
+Agent Resources,cilium.process.open_fds,cilium_process_open_fds,gauge,Open file descriptors,YES,YES,"kube_cluster_name, host",>80% of max
+Agent Resources,cilium.process.max_fds,cilium_process_max_fds,gauge,Max file descriptors,YES,YES,"kube_cluster_name, host",—
+Agent Internals,cilium.agent.api_process_time.seconds.sum,cilium_agent_api_process_time_seconds_sum,counter,API process time (sum),YES,YES,kube_cluster_name,Avg >1s
+Agent Internals,cilium.agent.api_process_time.seconds.count,cilium_agent_api_process_time_seconds_count,counter,API process time (count),YES,YES,kube_cluster_name,—
+Agent Internals,cilium.subprocess.start.count,cilium_subprocess_start_total,counter,Subprocess forks,YES,YES,kube_cluster_name,Unexpected spikes
+Agent Internals,cilium.triggers_policy.update_call_duration.seconds.sum,cilium_triggers_policy_update_call_duration_seconds_sum,counter,Policy trigger duration (sum),YES,YES,kube_cluster_name,Increasing
+Agent Internals,cilium.triggers_policy.update_call_duration.seconds.count,cilium_triggers_policy_update_call_duration_seconds_count,counter,Policy trigger duration (count),YES,YES,kube_cluster_name,—
+Agent Internals,cilium.triggers_policy.update_folds,cilium_triggers_policy_update_folds,gauge,Trigger folds (batching),YES,YES,kube_cluster_name,—
+Agent Internals,cilium.errors_warning.count,cilium_errors_warnings_total,counter,Agent errors/warnings,YES,YES,kube_cluster_name,Spike
+Agent Internals,cilium.operator.errors.warnings.total,cilium_operator_errors_warnings_total,counter,Operator errors/warnings,YES,YES,kube_cluster_name,Spike
+IPCache,cilium.ipcache.errors.count,cilium_ipcache_errors_total,counter,IPCache errors,YES,YES,"kube_cluster_name, type, error",>0
+IPCache,cilium.ipam.events.count,cilium_ipam_events_total,counter,IPAM events,YES,YES,"kube_cluster_name, type",—
+IPCache,cilium.ipam.capacity,cilium_ipam_capacity,gauge,IPAM capacity (may be empty on AKS),YES,YES,kube_cluster_name,—
+Node Mgmt,cilium.nodes.all_datapath_validations.count,cilium_nodes_all_datapath_validations_total,counter,Datapath validations,YES,YES,kube_cluster_name,—
+Node Mgmt,cilium.nodes.all_events_received.count,cilium_nodes_all_events_received_total,counter,Node events received,YES,YES,"kube_cluster_name, event_type, source",—
+Service Check,cilium.openmetrics.health,N/A (DD agent check),service_check,Cilium OpenMetrics scrape health,YES,YES (auto),kube_cluster_name,Status != OK
+Non-Cilium,kubernetes.containers.restarts,kubelet,counter,Container restarts,YES,YES (auto),"kube_cluster_name, host, kube_container_name",>2 in 15m
+Non-Cilium,kubernetes_state.node.count,KSM Core,gauge,Node count,YES,YES,kube_cluster_name,Drop
+Non-Cilium,kubernetes_state.node.by_condition,KSM Core,gauge,Nodes by condition,YES,YES,"kube_cluster_name, condition, status","ready=false"
+Non-Cilium,kubernetes_state.node.status,KSM Core,gauge,Node scheduling status,YES,YES,"kube_cluster_name, status",unschedulable
+Non-Cilium,kubernetes_state.node.cpu_allocatable,KSM Core,gauge,Allocatable CPU,YES,YES,"kube_cluster_name, host",Low headroom
+Non-Cilium,kubernetes_state.node.memory_allocatable,KSM Core,gauge,Allocatable memory,YES,YES,"kube_cluster_name, host",Low headroom
+Non-Cilium,kubernetes_state.node.pods_allocatable,KSM Core,gauge,Allocatable pods,YES,YES,"kube_cluster_name, host",Near limit
+Non-Cilium,kubernetes.cpu.usage.total,kubelet,gauge,CPU usage,YES,YES (auto),"kube_cluster_name, host",>80% of allocatable
+Non-Cilium,kubernetes.cpu.requests,kubelet,gauge,CPU requests,YES,YES (auto),"kube_cluster_name, host",—
+Non-Cilium,kubernetes.memory.usage,kubelet,gauge,Memory usage,YES,YES (auto),"kube_cluster_name, host",>80% of allocatable
+Non-Cilium,kubernetes.memory.requests,kubelet,gauge,Memory requests,YES,YES (auto),"kube_cluster_name, host",—
+Non-Cilium,kubernetes.pods.running,kubelet,gauge,Running pods,YES,YES (auto),"kube_cluster_name, host",Near allocatable
+Non-Cilium,system.cpu.user,DD Agent,gauge,User CPU %,YES,YES (auto),"kube_cluster_name, host",Total >80%
+Non-Cilium,system.cpu.system,DD Agent,gauge,System CPU %,YES,YES (auto),"kube_cluster_name, host",—
+Non-Cilium,system.cpu.iowait,DD Agent,gauge,IO wait CPU %,YES,YES (auto),"kube_cluster_name, host",—
+Non-Cilium,system.cpu.stolen,DD Agent,gauge,Stolen CPU %,YES,YES (auto),"kube_cluster_name, host",—
+Non-Cilium,system.mem.pct_usable,DD Agent,gauge,Usable memory %,YES,YES (auto),"kube_cluster_name, host",<15%
+Non-Cilium,system.mem.used,DD Agent,gauge,Used memory bytes,YES,YES (auto),"kube_cluster_name, host",—
+Non-Cilium,system.mem.total,DD Agent,gauge,Total memory bytes,YES,YES (auto),"kube_cluster_name, host",—
+Non-Cilium,system.disk.in_use,DD Agent,gauge,Disk usage ratio,YES,YES (auto),"kube_cluster_name, host",>85%
+Non-Cilium,system.io.util,DD Agent,gauge,Disk I/O util %,YES,YES (auto),"kube_cluster_name, host",>90% sustained
+Non-Cilium,system.net.bytes_rcvd,DD Agent,gauge,Network bytes in,YES,YES (auto),"kube_cluster_name, host",Saturation
+Non-Cilium,system.net.bytes_sent,DD Agent,gauge,Network bytes out,YES,YES (auto),"kube_cluster_name, host",Saturation
+Non-Cilium,system.net.packets_in.error,DD Agent,gauge,Inbound packet errors,YES,YES (auto),"kube_cluster_name, host",>0 sustained
+Non-Cilium,system.net.packets_out.error,DD Agent,gauge,Outbound packet errors,YES,YES (auto),"kube_cluster_name, host",>0 sustained
+Non-Cilium,system.net.packets_in.drop,DD Agent,gauge,Inbound packet drops,YES,YES (auto),"kube_cluster_name, host",>0 sustained
+Non-Cilium,system.net.conntrack.count,DD Agent,gauge,Conntrack entries,YES,YES (auto),"kube_cluster_name, host",>80% of max
+Non-Cilium,system.net.conntrack.max,DD Agent,gauge,Conntrack max,YES,YES (auto),"kube_cluster_name, host",—
+Non-Cilium,system.load.norm.1,DD Agent,gauge,1min normalized load,YES,YES (auto),"kube_cluster_name, host",>1.0 sustained
+Non-Cilium,system.load.norm.5,DD Agent,gauge,5min normalized load,YES,YES (auto),"kube_cluster_name, host",>1.0 sustained
+Non-Cilium,system.load.norm.15,DD Agent,gauge,15min normalized load,YES,YES (auto),"kube_cluster_name, host",>1.0 sustained
+Non-Cilium,system.uptime,DD Agent,gauge,System uptime seconds,YES,YES (auto),"kube_cluster_name, host",—
+Non-Cilium,oom_kill.oom_process.count,DD Agent,counter,OOM kill events,YES,YES (auto),"kube_cluster_name, host",>0
+Non-Cilium,tcp_queue.read_buffer_max_usage_pct,DD Agent,gauge,TCP read buffer usage %,YES,YES (auto),"kube_cluster_name, host",>80%
