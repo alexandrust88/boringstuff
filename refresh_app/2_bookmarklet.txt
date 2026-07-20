@@ -1,0 +1,38 @@
+=======================================================================
+IDEA 2 — BOOKMARKLET   (one click, no console, survives lockdowns better)
+=======================================================================
+
+A bookmarklet is a bookmark whose URL is JavaScript. You click it once on
+the ServiceNow tab and it starts a background ping every 12 min to keep the
+session token warm (no reload, no flicker). Clicking it again toggles it off.
+
+HOW TO INSTALL
+--------------
+1. Create any bookmark (bookmark this page, whatever).
+2. Edit the bookmark. Name it: "SN stay available".
+3. Replace its URL with the ENTIRE line below (it must stay one line, starting
+   with javascript:). Save.
+4. Open your ServiceNow tab, click the bookmark once. A small alert confirms
+   "ON". Click again later to turn OFF.
+
+If ping mode doesn't clear your 401, use the RELOAD bookmarklet (second one).
+
+-----------------------------------------------------------------------
+BOOKMARKLET A — BACKGROUND PING (recommended, no reload):
+-----------------------------------------------------------------------
+javascript:(function(){var M=12;if(window.__sa){clearInterval(window.__sa);window.__sa=null;alert('SN stay-available OFF');return;}function p(){fetch(location.origin+'/api/now/ui/user/current_user',{credentials:'include',cache:'no-store'}).then(function(r){console.log('[stay-available] '+new Date().toLocaleTimeString()+' ping '+r.status);}).catch(function(e){console.log('[stay-available] ping err',e);});}window.__sa=setInterval(p,M*60*1000);p();alert('SN stay-available ON — pinging every '+M+' min. Click again to stop.');})();
+
+-----------------------------------------------------------------------
+BOOKMARKLET B — CLICK "AVAILABLE" + RELOAD (use only if ping isn't enough):
+-----------------------------------------------------------------------
+Because a reload wipes the timer, this variant persists a flag in
+sessionStorage and re-arms on load. You still click it ONCE; but note that
+in Chrome/Edge a bookmarklet cannot auto-run on the reloaded page, so after a
+reload you'd re-click it. For true unattended reloads, use the auto-refresh
+extension (idea 3) or Playwright (idea 4). Prefer bookmarklet A when possible.
+
+javascript:(function(){var M=12;if(window.__sa){clearTimeout(window.__sa);window.__sa=null;alert('SN stay-available OFF');return;}function clickAvail(){var ds=[document];var f=document.querySelector("iframe[name='gsft_main'],iframe#gsft_main");try{if(f&&f.contentDocument)ds.push(f.contentDocument);}catch(e){}var w=['available','set as available'];for(var i=0;i<ds.length;i++){var els=ds[i].querySelectorAll("button,a,span,div[role='button'],[aria-label]");for(var j=0;j<els.length;j++){var t=((els[j].innerText||'')+' '+(els[j].getAttribute('aria-label')||'')).trim().toLowerCase();for(var k=0;k<w.length;k++){if(t===w[k]||t.indexOf(w[k])>-1){try{els[j].click();return true;}catch(e){}}}}}return false;}window.__sa=setTimeout(function(){clickAvail();location.reload();},M*60*1000);alert('SN stay-available ON — will click available + reload in '+M+' min once. Re-click after reload.');})();
+
+NOTE: bookmarklets that use fetch() run under the page's Content-Security-Policy.
+If ServiceNow's CSP blocks the fetch, you'll see a CSP error in the console —
+in that case use the reload variant or the extension/Playwright route.
